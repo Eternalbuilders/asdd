@@ -17,39 +17,63 @@ Two modes:
 
 ---
 
-## Quick install — fresh Mac, fresh repo
+## Where this repo lives, and how to work with it
+
+Two environments, by design:
+
+| | Dev (in this devcontainer) | Deploy (Mac host) |
+| --- | --- | --- |
+| Location | `/workspace/asdd-repo/` | `~/asdd/` (after unpacking the bundle) or wherever you choose |
+| Edit code? | Yes | No (deploy artifact) |
+| Run tests? | Yes (`make test`) | No |
+| Build bundle? | Yes (`make bundle`) | No |
+| `/speckit-*` slash commands? | Yes — write through to vault | No |
+| `specs/` symlink resolves? | Yes (`/vaults/ControlVault/Specs/asdd/`) | No (dangles — harmless, runtime doesn't use it) |
+| Run `asdd` CLI? | Optional — primarily for testing | **Yes — this is the production runtime** |
+
+Master specs live in the ControlVault Obsidian vault. `specs/` in the
+repo is a symlink to that vault location, so `/speckit-*` slash commands
+inside this repo write transparently to the vault and the specs are
+always visible in Obsidian. See `TRANSFER.md` for the full design.
+
+## Dev workflow (in this devcontainer)
 
 ```bash
-# 1. Host prerequisites
-brew install python@3.12 pipx git
-pipx ensurepath
-npm install -g @anthropic-ai/claude-code
-claude login                                  # populates ~/.claude/
-# Plus a container runtime: OrbStack (recommended) or Docker Desktop
-
-# 2. Get the source
-git clone https://github.com/<owner>/asdd ~/Code/asdd
-cd ~/Code/asdd
-
-# 3. Install the CLI (editable — keep the repo in place after this)
-pipx install --editable . --python python3.12
-
-# 4. Pick where projects live
-echo 'export ASDD_HOME=$HOME/AI-Hub/asdd' >> ~/.zshrc
-exec zsh
-
-# 5. Initialise and smoke-test
-asdd init
-asdd new smoke --description "smoke test"
-asdd open smoke
-# inside the container:  ls /asdd_home ; exit
+cd /workspace/asdd-repo
+make test                       # run pytest (skips docker tests if no daemon)
+make lint                       # ruff
+make bundle                     # produce asdd-bundle.tar.gz for deploy
+ls specs/                       # see specs in the vault via the symlink
 ```
 
-If `asdd open smoke` lands you at a shell prompt and `exit` cleans up
-quietly, you're good.
+`/speckit-*` slash commands run inside Claude Code while you're in this
+repo will write to `specs/` → which is the vault, so the spec docs are
+immediately visible in Obsidian.
 
-For the post-install path — projects, dispatch, scheduling — see
-`USER_GUIDE.md`.
+## Deploy to a Mac
+
+```bash
+# 1. In the devcontainer: build the bundle
+cd /workspace/asdd-repo
+make bundle
+# → asdd-bundle.tar.gz
+
+# 2. Carry the tarball to the target Mac (scp, AirDrop, etc.)
+
+# 3. On the Mac: unpack and install
+mkdir -p ~/asdd
+tar -xzf asdd-bundle.tar.gz -C ~/asdd --strip-components=1
+cd ~/asdd
+pipx install --editable . --python python3.12
+asdd --help
+```
+
+For the full Mac install path including host prerequisites
+(Docker/OrbStack, Python 3.12, Claude Code login, etc.), see
+`USER_GUIDE.md` §1–§5.
+
+For day-to-day operator usage (creating projects from GitHub repos,
+running jobs, scheduling) see `USER_GUIDE.md` §5–§9.
 
 ---
 
@@ -60,44 +84,35 @@ asdd/                  # the CLI Python package
 ├── bootstrap.py       # Click command tree
 ├── project_container.py
 ├── _schemas.py        # reads asdd/contracts/ at import time
-└── contracts/         # schemas asdd validates against (NOT spec docs)
+└── contracts/         # JSON schemas asdd validates against (in-package data)
 docker/
-├── Dockerfile.project # the per-project image
+├── Dockerfile.project # the per-project image (asdd/project:latest)
 └── files/asdd-run-job.sh
 project_skeleton/      # scaffold copied into every new project
                        # (.specify/ is added by `uvx specify init`)
-specs -> /Users/marius/Vaults/ControlVault/Specs/asdd/
+specs -> /vaults/ControlVault/Specs/asdd/
                        # symlink to master specs (in your vault)
 tests/                 # unit + integration
-pyproject.toml         # installs the `asdd` console script
+pyproject.toml         # name=asdd, deps: PyYAML, jsonschema, click
 README.md  USER_GUIDE.md  TRANSFER.md  Makefile
 ```
-
-The `specs/` directory is a symlink to the master spec location in your
-Obsidian vault, so `/speckit-*` slash commands work directly against
-spec docs that are always visible in Obsidian and never affected by
-worktrees. See `TRANSFER.md` for details.
 
 ## Makefile targets
 
 ```
-make install     # pipx install --editable .
+make help        # this list
+make install     # pipx install --editable . (host CLI install — for Mac use)
 make test        # pytest
 make lint        # ruff check
-make bundle      # build asdd-bundle.tar.gz for transport to another Mac
+make bundle      # build asdd-bundle.tar.gz (excludes specs/ symlink)
 make clean       # remove build artifacts
 ```
 
-`make bundle` produces a self-contained tarball suitable for installing
-on a different Mac without `git clone` (useful if the target doesn't
-have GitHub access). See `USER_GUIDE.md` §3 for the tarball install
-path.
-
-## Host requirements
+## Host requirements (for deploy to Mac)
 
 | Tool | Why |
 | --- | --- |
-| Container runtime — OrbStack or Docker Desktop | Builds & runs project images |
+| OrbStack or Docker Desktop | Builds & runs project images |
 | Python 3.12+ | `pyproject.toml` requires it |
 | `pipx` (recommended) | Cleanest way to install the CLI |
 | `git` | `asdd new --from-remote` clones GitHub repos |
@@ -109,12 +124,11 @@ are inside the project image.
 ## Dependencies (Python)
 
 Three deps:
-
 - `PyYAML` — registry I/O
 - `jsonschema` — registry + audit validation
 - `click` — CLI
 
-## Where things live at runtime
+## Where things live at runtime (post-install)
 
 ```
 $ASDD_HOME/

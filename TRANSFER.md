@@ -26,28 +26,42 @@ This repository was extracted from `github.com/Eternalbuilders/VaultControl`
 | Container name `controlvault-project-…` | `asdd-project-…`                   |
 | Package name `controlvault-agent`       | `asdd`                             |
 
-## Spec location
+## Spec location and dev/deploy model
 
-Master specs live **outside this repo** at
-`/Users/marius/Vaults/ControlVault/Specs/asdd/` (inside the existing
-ControlVault Obsidian vault). The repo exposes them via a symlink:
+Master specs live **outside this repo** in the ControlVault Obsidian
+vault. Development happens inside a Linux devcontainer where the vault
+is bind-mounted; deployment is to a Mac host where the same vault
+exists at a different absolute path.
+
+The repo's `specs/` symlink uses the **container-side path** so it
+resolves at dev time:
 
 ```
-<repo>/specs -> /Users/marius/Vaults/ControlVault/Specs/asdd/
+<repo>/specs  ->  /vaults/ControlVault/Specs/asdd
+                  (Mac equivalent: ~/Vaults/ControlVault/Specs/asdd)
 ```
 
-That symlink is committed, so worktrees inherit it. Spec content is
-never touched by git operations on this repo — only the symlink itself
-is.
+On the Mac the symlink will dangle (no `/vaults/` mount), but that
+doesn't matter — the asdd CLI itself never reads from `specs/` at
+runtime. Schemas live in `asdd/contracts/`, project templates live in
+`project_skeleton/`. `specs/` is purely a dev-time surface for
+`/speckit-*` slash commands and human spec authoring, both of which
+happen inside the container.
 
-If you clone this repo on a different machine, the symlink will dangle
-until you create the master spec directory at the same path (or change
-the symlink target). For now this is single-Mac portable by design.
+`make bundle` deliberately **excludes `specs/`** from the deploy
+tarball — specs aren't install material.
+
+This repo therefore has two natural environments:
+
+| Environment | Where | What works |
+| --- | --- | --- |
+| Dev (in-container) | `/workspace/asdd-repo/` | Everything: code, tests, `specs/` symlink, `/speckit-*` slash commands |
+| Deploy (Mac) | wherever the bundle gets unpacked | asdd CLI + container image build. No `specs/` symlink. |
 
 ## What was deliberately left behind
 
 These siblings from the source monorepo were **not** carried over —
-`asdd` doesn't import them and doesn't need them:
+asdd doesn't import them:
 
 - `kernel/` `agents/` `dashboards/` `browser_runner/`
 - `specs/001-…/contracts/`, `specs/002-…/contracts/`, `specs/005-…/contracts/`
