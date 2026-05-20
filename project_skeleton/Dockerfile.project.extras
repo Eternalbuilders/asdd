@@ -1,0 +1,22 @@
+# Per-project Dockerfile customisation hook (Spec 008 FR-008)
+#
+# THIS FILE IS A PLACEHOLDER. Spec 008 v1 does NOT consume it.
+#
+# Intended future contract:
+#   - `asdd new <id>` copies this file into the new project's workspace as
+#     `<workspace>/Dockerfile.project.extras`.
+#   - `asdd open <id>` detects that the file is non-empty (has at least one
+#     non-comment, non-blank line) and, if so, builds a per-project image
+#     `controlvault/project-<id>:latest` layered on the shared base, using
+#     this file as the appended fragment.
+#   - If the file is empty (just this header), `asdd open` uses the shared
+#     base `controlvault/project:latest` directly with no per-project build.
+#
+# Until that machinery lands, editing this file has no effect.
+#
+# Example future content (do NOT uncomment until the consumer ships):
+#   # ARG BASE_IMAGE
+#   # FROM $BASE_IMAGE
+#   # RUN apt-get update && apt-get install -y --no-install-recommends \
+#   #     dotnet-sdk-9.0 mono-complete \
+#   #  && rm -rf /var/lib/apt/lists/*

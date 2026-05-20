@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://controlvault.local/contracts/audit-log.schema.json",
+  "title": "ASDD Platform Audit Log Entry",
+  "description": "One newline-delimited JSON row per security-relevant event. File: ${ASDD_HOME}/_state/audit.log. Append-only.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["ts_utc", "kind"],
+  "properties": {
+    "ts_utc": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "kind": {
+      "type": "string",
+      "enum": [
+        "cross_project_attempt",
+        "bad_bind_mount",
+        "secret_pattern_in_vault",
+        "registry_load_error",
+        "kernel_bug"
+      ]
+    },
+    "project_id": {
+      "type": ["string", "null"],
+      "pattern": "^[a-z][a-z0-9-]{1,63}$"
+    },
+    "path": {
+      "type": ["string", "null"]
+    },
+    "detail": {
+      "type": "object",
+      "additionalProperties": true
+    }
+  }
+}

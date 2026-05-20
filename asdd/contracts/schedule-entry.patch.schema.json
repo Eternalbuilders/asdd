@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://controlvault.local/contracts/schedule-entry.patch.schema.json",
+  "title": "Schedule Entry — project_id amendment",
+  "description": "Additive patch to specs/001-vaultcontrol-architecture/contracts/schedule-entry.yml.schema.json. Adds an optional project_id field. Resolution: null → registry.default_project_id at job-creation time.",
+  "type": "object",
+  "properties": {
+    "project_id": {
+      "type": ["string", "null"],
+      "pattern": "^[a-z][a-z0-9-]{1,63}$"
+    }
+  }
+}

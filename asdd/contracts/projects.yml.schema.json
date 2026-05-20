@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://controlvault.local/contracts/projects.yml.schema.json",
+  "title": "ASDD Project Registry",
+  "description": "Authoritative list of ASDD projects on this host. Single source of truth for the kernel's project router. Hot-reloadable; invalid file keeps the previously-loaded copy.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "default_project_id", "projects"],
+  "properties": {
+    "version": {
+      "type": "integer",
+      "const": 1
+    },
+    "default_project_id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]{1,63}$",
+      "description": "Project ID assumed for inbox notes / schedule entries that omit project_id."
+    },
+    "projects": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "name",
+          "workspace_path",
+          "default_branch",
+          "lifecycle_state",
+          "created_at",
+          "last_checked_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{1,63}$",
+            "description": "Stable, never renamed. Used as the directory name under ${ASDD_HOME}/projects/."
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Human-readable label. May change without re-indexing past artifacts."
+          },
+          "workspace_path": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Absolute path to the project's on-disk workspace."
+          },
+          "git_remote": {
+            "type": ["string", "null"],
+            "description": "URL of the canonical Git remote, if any."
+          },
+          "default_branch": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Branch protected from destructive ops by default."
+          },
+          "lifecycle_state": {
+            "type": "string",
+            "enum": ["active", "paused", "archived", "unreachable", "unhealthy"]
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "last_checked_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "description": {
+            "type": ["string", "null"],
+            "description": "One-line summary surfaced in the platform dashboard."
+          }
+        }
+      }
+    }
+  }
+}

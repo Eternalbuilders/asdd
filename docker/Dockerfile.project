@@ -1,0 +1,99 @@
+# Dockerfile.project — per-project ASDD container image.
+#
+# Hosts the user-driven Claude Code session (interactive mode) and the
+# autonomous-mode `asdd-run-job` shim (dispatch mode) against ${ASDD_HOME}.
+# Built once by `asdd open` / `asdd dispatch` on first use, reused after.
+#
+# Image tag: asdd/project:latest
+
+FROM python:3.12-slim AS base
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    DEBIAN_FRONTEND=noninteractive
+
+# Base OS packages: git for the CLI's git ops, sops for secret decryption,
+# nodejs/npm to host Claude Code. Interactive comfort tooling (vim-tiny,
+# less, jq, ripgrep) kept minimal — this is operator-facing, not a dev box.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+        git \
+        gnupg \
+        jq \
+        less \
+        nodejs \
+        npm \
+        ripgrep \
+        sqlite3 \
+        vim-tiny \
+    && rm -rf /var/lib/apt/lists/*
+
+# Match the kernel image's SOPS version so encrypted-secret round-trips are
+# byte-compatible between operator and daemon.
+ARG SOPS_VERSION=3.9.0
+RUN ARCH="$(dpkg --print-architecture)" \
+    && curl -fsSL -o /usr/local/bin/sops \
+        "https://github.com/getsops/sops/releases/download/v${SOPS_VERSION}/sops-v${SOPS_VERSION}.linux.${ARCH}" \
+    && chmod +x /usr/local/bin/sops
+
+# uv — astral.sh package manager. Required by `asdd new` to invoke
+# `uvx --from git+https://github.com/github/spec-kit.git specify init`
+# when scaffolding a new project (replaces the old template-copy approach
+# that drifted from upstream Spec Kit and broke slash-command discovery).
+RUN curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh
+
+# Claude Code — same npm package the kernel image uses.
+RUN npm install -g @anthropic-ai/claude-code
+
+# Non-root user. UID 1000 matches the host's typical first user so
+# bind-mounted files keep sane ownership on macOS via OrbStack/Docker
+# Desktop's UID-mapping.
+#
+# The unix user is named `asdd` (matching the project) rather than
+# `operator` because Debian's base image already includes a stock
+# `operator` group (legacy POSIX) and useradd refuses to create a
+# user-private group with a colliding name.
+#
+# Recent python:3.12-slim also ships with a stock user at UID 1000
+# (typically `ubuntu`) — we remove it first so our useradd succeeds.
+RUN if id -u 1000 >/dev/null 2>&1; then \
+        userdel -r "$(id -un 1000)" 2>/dev/null || true; \
+    fi \
+    && useradd --create-home --shell /bin/bash --uid 1000 asdd
+
+WORKDIR /app
+
+# Install the asdd Python package into the image so `asdd new`, `asdd list`,
+# etc. work without re-installing inside every container start. The package
+# now bundles its own contracts/ subdirectory, so no separate spec COPY is
+# needed.
+COPY pyproject.toml README.md /app/
+COPY asdd/ /app/asdd/
+COPY project_skeleton/ /app/project_skeleton/
+
+# In-container job-runner shim for autonomous-mode dispatch (spec 008 US5).
+# `asdd dispatch <project> <job-note>` calls this script inside the
+# container; it pipes the job-note body through `claude --print` and
+# writes the result to /asdd_home/results/<basename>.result.md.
+# See docker/files/asdd-run-job.sh for the contract.
+COPY docker/files/asdd-run-job.sh /usr/local/bin/asdd-run-job
+RUN chmod +x /usr/local/bin/asdd-run-job
+
+RUN pip install --no-cache-dir -e .
+
+# Drop privileges; default shell at /asdd_home so the operator lands in the
+# platform's working area on container start.
+USER asdd
+ENV ASDD_HOME=/asdd_home \
+    HOME=/home/asdd
+WORKDIR /asdd_home
+
+# No ENTRYPOINT override — `docker compose run -it operator` (or with
+# a trailing `bash` / `claude`) drops the operator into a shell. Explicit
+# entrypoint left unset so `docker compose run --rm operator <cmd>` works
+# without --entrypoint overrides.
+CMD ["bash"]

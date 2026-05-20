@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://controlvault.local/contracts/inbox-note.frontmatter.patch.schema.json",
+  "title": "Inbox Note Frontmatter — project_id amendment",
+  "description": "Additive patch to specs/001-vaultcontrol-architecture/contracts/inbox-note.frontmatter.schema.json. Adds an optional top-level project_id field. Notes omitting the field resolve to registry.default_project_id at job-creation time; the inbox note itself is not rewritten.",
+  "type": "object",
+  "properties": {
+    "project_id": {
+      "type": ["string", "null"],
+      "pattern": "^[a-z][a-z0-9-]{1,63}$",
+      "description": "Owning project. Optional; null/absent means registry.default_project_id."
+    }
+  }
+}

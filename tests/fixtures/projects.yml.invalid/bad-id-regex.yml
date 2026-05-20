@@ -1,0 +1,10 @@
+version: 1
+default_project_id: vaultcontrol
+projects:
+  - id: "BadID-Caps"
+    name: Has Caps
+    workspace_path: /asdd_home/projects/badid
+    default_branch: main
+    lifecycle_state: active
+    created_at: 2026-05-14T00:00:00Z
+    last_checked_at: 2026-05-14T00:00:00Z

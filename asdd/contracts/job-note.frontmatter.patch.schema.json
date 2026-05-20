@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://controlvault.local/contracts/job-note.frontmatter.patch.schema.json",
+  "title": "Job Note Frontmatter — project_id amendment",
+  "description": "Additive patch to specs/001-vaultcontrol-architecture/contracts/job-note.frontmatter.schema.json. Adds a required project_id field. Pre-existing job notes are migrated to project_id='vaultcontrol' by a one-shot script; new dispatches always carry the field.",
+  "type": "object",
+  "required": ["project_id"],
+  "properties": {
+    "project_id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]{1,63}$",
+      "description": "Owning project; resolved from inbox note (or schedule entry) at job creation."
+    }
+  }
+}

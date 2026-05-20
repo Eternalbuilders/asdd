@@ -1,0 +1,54 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "asdd"
+version = "0.1.0"
+description = "ASDD — spec-driven-development CLI and per-project container manager."
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "Proprietary" }
+authors = [{ name = "Marius" }]
+dependencies = [
+    "PyYAML>=6.0",
+    "jsonschema>=4.21",
+    "click>=8.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.4",
+    "black>=24.3",
+]
+
+[project.scripts]
+asdd = "asdd.bootstrap:main"
+
+[tool.setuptools.packages.find]
+include = ["asdd*"]
+exclude = ["tests*", "project_skeleton*", "docker*", "scripts*", "specs*"]
+
+[tool.setuptools.package-data]
+asdd = ["contracts/*.json"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM"]
+ignore = ["E501", "SIM102", "SIM103", "SIM105"]
+
+[tool.black]
+line-length = 100
+target-version = ["py312"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+markers = [
+    "integration: integration tests; may launch subprocesses",
+    "docker: tests that require a working Docker daemon; skipped where docker is unavailable",
+]

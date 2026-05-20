@@ -1,0 +1,22 @@
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+
+# Build outputs
+asdd-bundle.tar.gz
+bundle-staging/
+
+# OS noise
+.DS_Store
+
+# Editor noise
+.idea/
+.vscode/

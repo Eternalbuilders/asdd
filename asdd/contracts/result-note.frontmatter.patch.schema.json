@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://controlvault.local/contracts/result-note.frontmatter.patch.schema.json",
+  "title": "Result Note Frontmatter — project_id amendment",
+  "description": "Additive patch to specs/001-vaultcontrol-architecture/contracts/result-note.frontmatter.schema.json. Adds a required project_id field copied from the originating job note. Result files land in <project-workspace>/results/<YYYY-MM-DD>/.",
+  "type": "object",
+  "required": ["project_id"],
+  "properties": {
+    "project_id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]{1,63}$"
+    }
+  }
+}
