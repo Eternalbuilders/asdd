@@ -1,15 +1,31 @@
 # ASDD — Install & First-Project Guide
 
-This bundle is everything you need to install the ASDD CLI on a new Mac, build
-the project container image, and run your first project — either interactively
-or as a scheduled background job.
+ASDD runs Claude Code inside a per-project Docker container on your Mac and
+manages those containers for you. Instead of pointing `claude` straight at your
+laptop's filesystem, each project gets an isolated container with only its own
+workspace mounted — so an agent can edit, run, and experiment freely without
+any path to the rest of your machine.
 
-This is the **slim** bundle: just the asdd CLI and the pieces it actually
-uses at runtime. The sibling packages from the upstream monorepo (`kernel/`,
-`agents/`, `dashboards/`, `browser_runner/`) and the contracts they own
-(`specs/001-…`, `specs/002-…`, `specs/005-…`) are not included. The
-`Dockerfile.project` in this bundle has been slimmed to match — no orphaned
-COPY lines.
+Three reasons to use it:
+
+- **A safe Claude development environment.** Claude works inside a container
+  that can only see one project's files. A bad command, a runaway script, or an
+  over-eager refactor can't touch your home directory, your other projects, or
+  your system — `ls /` inside the container doesn't even show them. You get the
+  upside of letting Claude act autonomously without putting your Mac at risk.
+- **Always-on remote sessions.** Start a persistent Claude session that keeps
+  running on the Mac, auto-restarts if it crashes or after a reboot, and shows
+  up in the Claude app on your phone and at claude.ai. Kick something off at
+  your desk and keep steering it from your phone later.
+- **Scheduled, unattended jobs.** Write a task as a markdown file and have
+  Claude run it later — overnight, on a timer, whenever — with the result
+  written back into the project. Nobody has to be at the keyboard.
+
+Everything authenticates with **your Claude subscription** — one login, reused
+everywhere. A metered API key is an optional override, not a requirement.
+
+This guide installs the CLI, builds the project container image, and walks
+through your first project end to end.
 
 ---
 
@@ -17,22 +33,24 @@ COPY lines.
 
 ```
 asdd-bundle/
-├── USER_GUIDE.md                              ← this file
-├── README.md                                  ← upstream repo README
-├── pyproject.toml                             ← installs the `asdd` console script
-├── asdd/                                      ← the CLI Python package (only one)
+├── USER_GUIDE.md                  ← this file
+├── README.md
+├── pyproject.toml                 ← installs the `asdd` console script
+├── asdd/                          ← the CLI Python package
+│   └── contracts/                 ← JSON schemas asdd reads at import time
 ├── docker/
-│   ├── Dockerfile.project                     ← project-container image (slimmed)
-│   └── files/asdd-run-job.sh                  ← in-container job runner
-├── specs/007-asdd-architecture/contracts/     ← schemas asdd reads at import time
-└── controlvault-skeleton/_templates/          ← scaffold copied into every new project
+│   ├── Dockerfile.project         ← project-container image
+│   └── files/
+│       ├── asdd-run-job.sh        ← in-container job runner (dispatch)
+│       └── asdd-session.sh        ← in-container persistent-session entrypoint
+└── project_skeleton/              ← scaffold copied into every new project
 ```
 
-The unpacked directory **is** your ASDD source tree on this machine. Do not
-delete or move it after install — the CLI computes paths relative to where
-this tree lives (`Dockerfile.project` is loaded from `<bundle>/docker/`, the
-templates from `<bundle>/controlvault-skeleton/_templates/`, the JSON schemas
-from `<bundle>/specs/007-…/contracts/`). A good home is `~/asdd/`.
+The unpacked directory **is** your ASDD source tree on this machine. Don't
+delete or move it after install — the CLI computes paths relative to where this
+tree lives (the Dockerfile from `<bundle>/docker/`, the scaffold from
+`<bundle>/project_skeleton/`, the schemas from `<bundle>/asdd/contracts/`). A
+good home is `~/asdd/`.
 
 Python dependencies installed by `pip`/`pipx`: `PyYAML`, `jsonschema`, `click`.
 That's it.
@@ -41,24 +59,40 @@ That's it.
 
 ## 2. Host prerequisites
 
-Install these on the target Mac before running any `asdd` command.
+Install these on the target Mac, in this order, before running any `asdd`
+command:
 
-| Dependency       | Why                                              | Install                                                    |
-| ---------------- | ------------------------------------------------ | ---------------------------------------------------------- |
-| Docker or OrbStack | The CLI shells out to `docker build` / `docker run`.       | https://orbstack.dev/ (recommended on macOS) or Docker Desktop. |
-| Python 3.12+     | `pyproject.toml` declares `requires-python >=3.12`. | `brew install python@3.12`                                  |
-| `pipx` (optional) | Cleanest way to install a console script in isolation. | `brew install pipx && pipx ensurepath`                      |
-| `git`            | `asdd new --from-remote` clones repos via `git`.          | `brew install git` (Xcode CLT also works)                   |
-| Claude Code      | Lives **inside** the container, but auth is read from your host `~/.claude/`. Install it on the host once, run `claude login`. | `npm install -g @anthropic-ai/claude-code` then `claude login` |
+1. **Docker or OrbStack** — the CLI shells out to `docker build` / `docker run`,
+   and your sessions run as containers. [OrbStack](https://orbstack.dev/) is
+   recommended on macOS (lighter and faster); Docker Desktop also works.
+2. **Homebrew** — the simplest way to install the rest. See https://brew.sh if
+   you don't already have it.
+3. **Python 3.12+** — `asdd` requires it: `brew install python@3.12`.
+4. **pipx** — cleanest way to install a console script in isolation:
+   `brew install pipx && pipx ensurepath`.
+5. **git** — `asdd new --from-remote` clones repos with it: `brew install git`
+   (the Xcode Command Line Tools also provide it).
 
-Optional, for autonomous-mode (`asdd dispatch`) without an operator shell:
+You do **not** need `uv`, `sops`, `age`, `node`, or Claude Code on the host —
+those are all pre-installed inside the project image. You log in to Claude with
+`asdd login --fresh` (§6a), which runs the login *inside* a container, so
+nothing about Claude has to exist on the host first.
 
-| Dependency        | Why                                                                                  |
-| ----------------- | ------------------------------------------------------------------------------------ |
-| `ANTHROPIC_API_KEY` env var | Autonomous-mode does not mount `~/.claude/`; it passes this var into the container. |
+### Do I need an Anthropic API key?
 
-You do **not** need `uv`, `sops`, `age`, or `node` on the host — those are
-pre-installed inside the project image.
+**No — not for normal use.** Every mode (interactive, dispatch, persistent)
+authenticates with your Claude subscription via a one-time `asdd login`, and the
+stored session refreshes itself automatically, including for unattended jobs.
+The persistent / mobile session in fact *requires* the subscription login —
+Claude Code's Remote Control only works with a claude.ai subscription, not an
+API key.
+
+A metered `ANTHROPIC_API_KEY` is an **opt-in override** for one situation: when
+you want a specific `asdd dispatch` run billed to API usage instead of your
+subscription — for example to keep a client's token costs separate, or to avoid
+spending your subscription's rate limit on a large batch job. You pass
+`--api-key` on that single run (§8), and the subscription store is then not
+mounted for it. If you don't have that need, ignore the API key entirely.
 
 ---
 
@@ -147,7 +181,7 @@ The repo's existing files are preserved on `main`; the scaffolding sits on
 `asdd/bootstrap`. Switch between them with normal git.
 
 > **First-time build note**: the next step (`asdd open` or `asdd dispatch`)
-> will trigger a one-time `docker build` of `controlvault/project:latest`,
+> will trigger a one-time `docker build` of `asdd/project:latest`,
 > which takes ~30–60 seconds. The CLI streams the build output so it isn't
 > silent.
 
@@ -254,7 +288,7 @@ EOF
 
 ```bash
 # Production: runs on your Claude subscription, using the login you
-# established with `asdd login` (see §7a). No API key needed.
+# established with `asdd login` (see §6a). No API key needed.
 asdd dispatch hello-world \
   $ASDD_HOME/projects/hello-world/inbox/audit.md
 ```
@@ -305,11 +339,19 @@ asdd session status hello-world # running? restart_count? supervised?
 asdd stop hello-world           # the ONLY way it stays down (also disables the supervisor)
 ```
 
-Connecting from your phone: the session is registered with Anthropic over an
-**outbound** connection (Claude Code's Remote Control) — it shows up in the
-session list on mobile/web automatically, with no inbound port opened on the
-Mac. The session URL/QR is also printed in the container log
-(`docker logs asdd-project-<id>`).
+Continuing on your phone: because the session runs `claude --remote-control`,
+it registers with Anthropic over an **outbound** connection and appears in the
+**session list in the Claude mobile app and at claude.ai automatically** — no
+inbound port is opened on the Mac. Open the Claude app on your phone, pick the
+session (named after the project), and you're in the *same* conversation that's
+running on your Mac: read what it's done, send the next instruction, approve a
+step. Whatever you do on the phone shows up when you re-attach locally with
+`asdd attach`, and vice versa — it's one shared session, not a copy. So you can
+start work at your desk, walk away, and keep driving it from the train.
+
+The container's actual code, files, and tools never leave your Mac; Anthropic's
+backend only relays your messages. To grab the join URL/QR directly, attach
+locally (`asdd attach <id>`) — it's shown at the top of the session.
 
 How it works under the hood:
 - The container's main process is a `tmux` session running one interactive
@@ -350,13 +392,22 @@ This survives reboots.
 
 ### Schedule a single run
 
+This runs on your Claude subscription — no API key. The stored login refreshes
+itself, so a job scheduled now still authenticates when it fires hours later,
+with nobody at the keyboard. The only thing the non-interactive `at` shell
+needs spelled out is `ASDD_HOME` (your `.zshrc` isn't loaded — see caveats):
+
 ```bash
-echo "export ANTHROPIC_API_KEY=sk-ant-…; \
+echo "export ASDD_HOME=$ASDD_HOME; \
       $(which asdd) dispatch hello-world \
         $ASDD_HOME/projects/hello-world/inbox/audit.md \
         > $HOME/asdd-dispatch.log 2>&1" \
   | at 21:00
 ```
+
+(If you wanted *this* run billed to a metered API key instead of your
+subscription, add `--api-key` to the `dispatch` command and `export
+ANTHROPIC_API_KEY=sk-ant-…;` ahead of it. Not needed for normal use — see §2.)
 
 Other time forms `at` accepts:
 - `at now + 30 minutes`
@@ -373,8 +424,9 @@ atrm <jobid>  # remove a queued job
 ### Caveats to know
 
 - `at` runs in a **non-interactive shell** — your `.zshrc` exports aren't
-  loaded. Put any env vars (`ANTHROPIC_API_KEY`, `ASDD_HOME`) inline in the
-  command you pipe to `at`, or `source` your `~/.zshrc` first.
+  loaded. Put any env vars (`ASDD_HOME`, and `ANTHROPIC_API_KEY` only if you're
+  using the API-key override) inline in the command you pipe to `at`, or
+  `source` your `~/.zshrc` first.
 - Use absolute paths. The example above uses `$(which asdd)` and the full
   `$ASDD_HOME` path for that reason.
 - `at` does **not** wake a sleeping Mac. If the Mac is asleep at the fire
