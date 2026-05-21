@@ -14,6 +14,10 @@ build/
 asdd-bundle.tar.gz
 bundle-staging/
 
+# Subscription credential store (spec 009) — live OAuth tokens, never commit
+_state/claude-auth/
+**/claude-auth/
+
 # OS noise
 .DS_Store
 

@@ -80,8 +80,9 @@ COPY project_skeleton/ /app/project_skeleton/
 # container; it pipes the job-note body through `claude --print` and
 # writes the result to /asdd_home/results/<basename>.result.md.
 # See docker/files/asdd-run-job.sh for the contract.
-COPY docker/files/asdd-run-job.sh /usr/local/bin/asdd-run-job
-RUN chmod +x /usr/local/bin/asdd-run-job
+# Explicit 0755 (not `chmod +x`, which is umask-sensitive) so the non-root
+# `asdd` user can execute it — the source script is mode 0600.
+COPY --chmod=0755 docker/files/asdd-run-job.sh /usr/local/bin/asdd-run-job
 
 RUN pip install --no-cache-dir -e .
 

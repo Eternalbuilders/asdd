@@ -277,7 +277,7 @@ def list_keys(workspace_path: Path) -> list[str]:
         ) from e
     if not isinstance(parsed, dict):
         return []
-    return [k for k in parsed.keys() if k != "sops"]
+    return [k for k in parsed if k != "sops"]
 
 
 __all__ = [

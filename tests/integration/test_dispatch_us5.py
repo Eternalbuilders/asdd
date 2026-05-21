@@ -11,7 +11,6 @@ Gated by @pytest.mark.docker; skipped where no docker socket.
 
 from __future__ import annotations
 
-import os
 import subprocess
 import time
 from pathlib import Path

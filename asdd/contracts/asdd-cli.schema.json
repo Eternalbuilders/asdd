@@ -1,34 +1,60 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://controlvault.local/contracts/asdd-cli.schema.json",
-  "title": "asdd CLI — subcommand schema",
+  "title": "asdd CLI \u2014 subcommand schema",
   "description": "The platform's single bootstrap/management CLI, exposed as the `asdd` console script. Each subcommand's positional and optional arguments are defined here so the inbox-note dispatcher and the terminal entrypoint use one source of truth.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["subcommands"],
+  "required": [
+    "subcommands"
+  ],
   "properties": {
     "subcommands": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["new", "list", "pause", "resume", "archive", "doctor", "secrets"],
+      "required": [
+        "new",
+        "list",
+        "pause",
+        "resume",
+        "archive",
+        "doctor",
+        "secrets"
+      ],
       "properties": {
         "new": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["positional", "options"],
+          "required": [
+            "positional",
+            "options"
+          ],
           "properties": {
             "positional": {
               "type": "array",
               "items": [
-                { "name": "id", "type": "string", "pattern": "^[a-z][a-z0-9-]{1,63}$" }
+                {
+                  "name": "id",
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9-]{1,63}$"
+                }
               ]
             },
             "options": {
               "type": "object",
               "properties": {
-                "--from-remote": { "type": "string", "description": "Git remote URL to clone." },
-                "--description": { "type": "string", "description": "One-line project description." },
-                "--name": { "type": "string", "description": "Human-readable name; defaults to id." }
+                "--from-remote": {
+                  "type": "string",
+                  "description": "Git remote URL to clone."
+                },
+                "--description": {
+                  "type": "string",
+                  "description": "One-line project description."
+                },
+                "--name": {
+                  "type": "string",
+                  "description": "Human-readable name; defaults to id."
+                }
               }
             }
           }
@@ -40,29 +66,161 @@
             "options": {
               "type": "object",
               "properties": {
-                "--include-archived": { "type": "boolean", "default": false },
-                "--format": { "type": "string", "enum": ["table", "json", "yaml"], "default": "table" }
+                "--include-archived": {
+                  "type": "boolean",
+                  "default": false
+                },
+                "--format": {
+                  "type": "string",
+                  "enum": [
+                    "table",
+                    "json",
+                    "yaml"
+                  ],
+                  "default": "table"
+                }
               }
             }
           }
         },
-        "pause":   { "$ref": "#/$defs/idPositional" },
-        "resume":  { "$ref": "#/$defs/idPositional" },
-        "archive": { "$ref": "#/$defs/idPositional" },
-        "doctor":  { "$ref": "#/$defs/idPositional" },
+        "pause": {
+          "$ref": "#/$defs/idPositional"
+        },
+        "resume": {
+          "$ref": "#/$defs/idPositional"
+        },
+        "archive": {
+          "$ref": "#/$defs/idPositional"
+        },
+        "doctor": {
+          "$ref": "#/$defs/idPositional"
+        },
         "secrets": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["actions"],
+          "required": [
+            "actions"
+          ],
           "properties": {
             "actions": {
               "type": "object",
               "additionalProperties": false,
-              "required": ["add", "remove", "list"],
+              "required": [
+                "add",
+                "remove",
+                "list"
+              ],
               "properties": {
-                "add":    { "$ref": "#/$defs/secretsAddPositional" },
-                "remove": { "$ref": "#/$defs/secretsKeyPositional" },
-                "list":   { "$ref": "#/$defs/idPositional" }
+                "add": {
+                  "$ref": "#/$defs/secretsAddPositional"
+                },
+                "remove": {
+                  "$ref": "#/$defs/secretsKeyPositional"
+                },
+                "list": {
+                  "$ref": "#/$defs/idPositional"
+                }
+              }
+            }
+          }
+        },
+        "login": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "options": {
+              "type": "object",
+              "properties": {
+                "--fresh": {
+                  "type": "boolean",
+                  "default": false,
+                  "description": "Ignore any host login and log in fresh inside a container."
+                }
+              }
+            }
+          }
+        },
+        "logout": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Remove the Claude subscription credential store. Idempotent."
+        },
+        "whoami": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Show Claude subscription auth status; no network call, never prints token values."
+        },
+        "serve": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Persistent-session command `serve` (spec 010).",
+          "properties": {
+            "positional": {
+              "type": "array",
+              "items": [
+                {
+                  "name": "id",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        "attach": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Persistent-session command `attach` (spec 010).",
+          "properties": {
+            "positional": {
+              "type": "array",
+              "items": [
+                {
+                  "name": "id",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        "stop": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Persistent-session command `stop` (spec 010).",
+          "properties": {
+            "positional": {
+              "type": "array",
+              "items": [
+                {
+                  "name": "id",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        "session": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Persistent-session inspection group (spec 010).",
+          "properties": {
+            "subcommands": {
+              "type": "object",
+              "properties": {
+                "status": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "positional": {
+                      "type": "array",
+                      "items": [
+                        {
+                          "name": "id",
+                          "type": "string"
+                        }
+                      ]
+                    }
+                  }
+                }
               }
             }
           }
@@ -74,12 +232,18 @@
     "idPositional": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["positional"],
+      "required": [
+        "positional"
+      ],
       "properties": {
         "positional": {
           "type": "array",
           "items": [
-            { "name": "id", "type": "string", "pattern": "^[a-z][a-z0-9-]{1,63}$" }
+            {
+              "name": "id",
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9-]{1,63}$"
+            }
           ]
         }
       }
@@ -87,13 +251,23 @@
     "secretsAddPositional": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["positional"],
+      "required": [
+        "positional"
+      ],
       "properties": {
         "positional": {
           "type": "array",
           "items": [
-            { "name": "id",  "type": "string", "pattern": "^[a-z][a-z0-9-]{1,63}$" },
-            { "name": "key", "type": "string", "pattern": "^[A-Z][A-Z0-9_]{0,63}$" }
+            {
+              "name": "id",
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9-]{1,63}$"
+            },
+            {
+              "name": "key",
+              "type": "string",
+              "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+            }
           ]
         }
       }
@@ -101,13 +275,23 @@
     "secretsKeyPositional": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["positional"],
+      "required": [
+        "positional"
+      ],
       "properties": {
         "positional": {
           "type": "array",
           "items": [
-            { "name": "id",  "type": "string", "pattern": "^[a-z][a-z0-9-]{1,63}$" },
-            { "name": "key", "type": "string", "pattern": "^[A-Z][A-Z0-9_]{0,63}$" }
+            {
+              "name": "id",
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9-]{1,63}$"
+            },
+            {
+              "name": "key",
+              "type": "string",
+              "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+            }
           ]
         }
       }

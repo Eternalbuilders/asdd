@@ -13,7 +13,6 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from asdd import secrets
 from asdd.secrets import (
     SecretsConfigError,
     SopsEncryptError,

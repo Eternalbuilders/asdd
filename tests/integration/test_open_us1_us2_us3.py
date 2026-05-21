@@ -30,7 +30,6 @@ from pathlib import Path
 import pytest
 import yaml
 
-
 pytestmark = pytest.mark.docker
 
 

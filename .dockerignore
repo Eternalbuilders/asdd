@@ -1,0 +1,17 @@
+# Keep the image build context lean and avoid the dev-only `specs/` symlink
+# (it dangles outside the container and is never copied into the image).
+specs
+.git
+.gitignore
+.dockerignore
+asdd-bundle.tar.gz
+bundle-staging
+tests
+.specify
+.pytest_cache
+.ruff_cache
+.mypy_cache
+**/__pycache__
+*.pyc
+*.pyo
+.DS_Store

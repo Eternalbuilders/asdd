@@ -29,9 +29,9 @@ from typing import Any
 import click
 import yaml
 
-from asdd import lifecycle, project_container, secrets, workspace
-from asdd.registry import Project
+from asdd import auth, lifecycle, project_container, secrets, supervisor, workspace
 from asdd._schemas import validate_registry
+from asdd.registry import Project
 
 log = logging.getLogger("asdd.bootstrap")
 
@@ -317,6 +317,15 @@ def cmd_archive(*, asdd_home: Path, project_id: str) -> dict[str, Any]:
         raise BootstrapError(f"project {project_id!r} not found in registry")
     workspace_path = Path(target["workspace_path"])
 
+    # FR-014 (spec 010): tear down any persistent session + its supervisor so
+    # archiving doesn't leave an orphaned agent trying to start a dead project.
+    try:
+        supervisor.uninstall(project_id)
+    except supervisor.SupervisorError:
+        log.warning("archive: could not remove supervisor for %s", project_id)
+    project_container.stop_container(project_id)
+    project_container.remove_container(project_id, force=True)
+
     # Snapshot to _archive/<id>-<ts>.tar.gz before the state transition.
     archive_dir = asdd_home / "_archive"
     archive_dir.mkdir(parents=True, exist_ok=True)
@@ -402,6 +411,13 @@ def cmd_open(*, asdd_home: Path, project_id: str) -> int:
     """
     row = _registry_lookup(asdd_home, project_id)
 
+    # FR-013: if a persistent session is already running, attach to it rather
+    # than starting a second container.
+    if project_container.is_persistent_running(project_id):
+        return project_container.attach_session(project_id)
+
+    _require_login(asdd_home, interactive=True)
+
     project_container.ensure_image_built()
     project_container.assert_not_running(project_id)
 
@@ -411,6 +427,7 @@ def cmd_open(*, asdd_home: Path, project_id: str) -> int:
         project_id=project_id,
         mode="interactive",
         workspace_path=Path(row["workspace_path"]),
+        asdd_home=asdd_home,
     )
     project_container.start_container(pc_obj, extra_env=project_secrets)
     try:
@@ -436,13 +453,17 @@ def cmd_ps() -> list[dict[str, str]]:
     return project_container.list_running()
 
 
-def cmd_dispatch(*, asdd_home: Path, project_id: str, job_path: Path) -> Path:
+def cmd_dispatch(
+    *, asdd_home: Path, project_id: str, job_path: Path, use_api_key: bool = False
+) -> Path:
     """Run one autonomous-mode job inside a project's container (spec 008 US5 / FR-009).
 
-    Starts the project's container in autonomous mode (no operator host
-    credentials), invokes the in-image `asdd-run-job` shim against the
-    job-note file, captures the result to the project's `results/` dir,
-    and stops the container.
+    By default the job authenticates on the operator's subscription via the
+    mounted credential store (spec 009 FR-002); pass ``use_api_key`` to bill
+    the run to ``ANTHROPIC_API_KEY`` instead and suppress the store mount
+    (FR-007). Invokes the in-image `asdd-run-job` shim against the job-note
+    file, captures the result to the project's `results/` dir, and stops the
+    container.
 
     The ``job_path`` MUST resolve to a path under the project's
     workspace (so the in-container path is reachable through the
@@ -466,40 +487,56 @@ def cmd_dispatch(*, asdd_home: Path, project_id: str, job_path: Path) -> Path:
             f"bind mount makes it visible to the container"
         ) from e
 
-    project_container.ensure_image_built()
-    project_container.assert_not_running(project_id)
+    # Subscription is the default; fail fast (no prompt) if not logged in,
+    # unless the operator opted into API-key billing for this run.
+    in_container_path = f"{project_container.IN_CONTAINER_WORKDIR}/{job_rel}"
 
-    project_secrets = _decrypt_project_secrets(row)
-
-    pc_obj = project_container.ProjectContainer(
-        project_id=project_id,
-        mode="autonomous",
-        workspace_path=workspace_path,
-    )
-    project_container.start_container(pc_obj, extra_env=project_secrets)
-    try:
-        in_container_path = f"{project_container.IN_CONTAINER_WORKDIR}/{job_rel}"
-        result = subprocess.run(
-            [
-                "docker",
-                "exec",
-                project_container.container_name(project_id),
-                "asdd-run-job",
-                in_container_path,
-            ],
-            capture_output=True,
-            text=True,
+    # FR-013: if a persistent session is already up for this project, run the
+    # job inside that warm container (no second container, no start/stop).
+    if project_container.is_persistent_running(project_id):
+        _run_job_exec(project_id, in_container_path, job_rel)
+    else:
+        if not use_api_key:
+            _require_login(asdd_home, interactive=False)
+        project_container.ensure_image_built()
+        project_container.assert_not_running(project_id)
+        project_secrets = _decrypt_project_secrets(row)
+        pc_obj = project_container.ProjectContainer(
+            project_id=project_id,
+            mode="autonomous",
+            workspace_path=workspace_path,
+            asdd_home=asdd_home,
+            use_api_key=use_api_key,
         )
-        if result.returncode != 0:
-            raise project_container.ProjectContainerError(
-                f"asdd-run-job exited {result.returncode} for {job_rel}: "
-                f"{result.stderr.strip() or result.stdout.strip()}"
-            )
-    finally:
-        project_container.stop_container(project_id)
+        project_container.start_container(pc_obj, extra_env=project_secrets)
+        try:
+            _run_job_exec(project_id, in_container_path, job_rel)
+        finally:
+            project_container.stop_container(project_id)
 
     result_file = workspace_path / "results" / f"{job_path.stem}.result.md"
     return result_file
+
+
+def _run_job_exec(project_id: str, in_container_path: str, job_rel: Path) -> None:
+    """Run the in-image job shim inside an already-running container."""
+    result = subprocess.run(
+        [
+            "docker",
+            "exec",
+            project_container.container_name(project_id),
+            "asdd-run-job",
+            in_container_path,
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        detail = result.stderr.strip() or result.stdout.strip()
+        raise project_container.ProjectContainerError(
+            f"{_classify_job_failure(detail)} "
+            f"(asdd-run-job exited {result.returncode} for {job_rel}: {detail})"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -558,6 +595,243 @@ def cmd_secrets_list(*, asdd_home: Path, project_id: str) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
+# Spec 009 — subscription credential store
+# ---------------------------------------------------------------------------
+
+
+def cmd_login(*, asdd_home: Path, fresh: bool = False) -> str:
+    """Establish the asdd-owned subscription credential store (spec 009 US1).
+
+    Seeds from the operator's existing host login when present and ``fresh``
+    is False; otherwise runs a fresh interactive ``claude`` login inside a
+    container with the store mounted. Returns the source
+    (``seeded-from-host`` | ``fresh-login``). Raises BootstrapError on
+    failure.
+    """
+    if not fresh and auth.host_login_present():
+        with auth.store_lock(asdd_home):
+            try:
+                auth.seed_from_host(asdd_home)
+            except auth.AuthError as e:
+                raise BootstrapError(str(e)) from e
+            # A host login can carry config but no portable credential file
+            # to copy. Guard against seeding a store that wouldn't actually
+            # authenticate, and direct the operator to log in in-container.
+            if not auth.has_credential(asdd_home):
+                auth.clear(asdd_home)
+                raise BootstrapError(
+                    "host Claude config was found but no portable credential "
+                    "file (~/.claude/.credentials.json) to copy. Run "
+                    "`asdd login --fresh` to log in inside a container."
+                )
+        _emit_progress("login", source=auth.SOURCE_SEEDED)
+        return auth.SOURCE_SEEDED
+
+    # Fresh / no host login: interactive in-container login.
+    project_container.ensure_image_built()
+    with auth.store_lock(asdd_home):
+        auth.prepare_empty_store(asdd_home)
+    rc = project_container.run_interactive_login(asdd_home)
+    if rc != 0 or not auth.has_credential(asdd_home):
+        with auth.store_lock(asdd_home):
+            auth.clear(asdd_home)
+        raise BootstrapError(
+            "in-container `claude` login did not produce a credential "
+            f"(exit {rc}); nothing stored. Re-run `asdd login --fresh` and "
+            "complete the login prompt."
+        )
+    auth.mark_fresh_login(asdd_home)
+    _emit_progress("login", source=auth.SOURCE_FRESH)
+    return auth.SOURCE_FRESH
+
+
+def cmd_logout(*, asdd_home: Path) -> bool:
+    """Clear the subscription credential store (spec 009 FR-011). Idempotent."""
+    with auth.store_lock(asdd_home):
+        removed = auth.clear(asdd_home)
+    _emit_progress("logout", removed=removed)
+    return removed
+
+
+def cmd_whoami(*, asdd_home: Path) -> auth.AuthStatus:
+    """Return local auth status without any network call (spec 009 FR-011)."""
+    return auth.status(asdd_home)
+
+
+def _classify_job_failure(detail: str) -> str:
+    """Map a Claude/runner failure to the FR-013 operator-facing category."""
+    low = detail.lower()
+    auth_signals = ("401", "unauthorized", "authentication", "invalid api key", "oauth", "log in", "login")
+    limit_signals = ("rate limit", "usage limit", "quota", "429", "limit reached")
+    if any(s in low for s in limit_signals):
+        return "subscription usage limit reached — wait for the window to reset or upgrade"
+    if any(s in low for s in auth_signals):
+        return "re-login required — run `asdd login`"
+    return "job failed"
+
+
+def _require_login(asdd_home: Path, *, interactive: bool) -> None:
+    """Guard for credentialed runs. Autonomous callers must fail fast; the
+    interactive caller gets the same error but the CLI layer turns it into
+    guidance (spec 009 FR-006)."""
+    if not auth.is_logged_in(asdd_home):
+        raise BootstrapError(
+            "no subscription login found — run `asdd login` first "
+            "(or pass --api-key to use ANTHROPIC_API_KEY for this run)"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Spec 010 — persistent supervised sessions
+# ---------------------------------------------------------------------------
+
+
+def _restarts_file(asdd_home: Path, project_id: str) -> Path:
+    return asdd_home / "_state" / "sessions" / f"{project_id}.restarts"
+
+
+def _read_restarts(asdd_home: Path, project_id: str) -> int:
+    p = _restarts_file(asdd_home, project_id)
+    try:
+        return int(p.read_text().strip())
+    except (OSError, ValueError):
+        return 0
+
+
+def _write_restarts(asdd_home: Path, project_id: str, n: int) -> None:
+    p = _restarts_file(asdd_home, project_id)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(f"{n}\n")
+
+
+def _start_persistent_container(asdd_home: Path, project_id: str) -> None:
+    """Run a fresh persistent container for the project (image must exist)."""
+    row = _registry_lookup(asdd_home, project_id)
+    pc_obj = project_container.ProjectContainer(
+        project_id=project_id,
+        mode="persistent",
+        workspace_path=Path(row["workspace_path"]),
+        asdd_home=asdd_home,
+    )
+    project_container.start_container(pc_obj, extra_env=_decrypt_project_secrets(row))
+
+
+def cmd_serve(*, asdd_home: Path, project_id: str) -> bool:
+    """Start a project's persistent session and install its supervisor (US1).
+
+    Brings the container up now, then installs the launchd babysitter agent
+    (KeepAlive) that keeps it alive thereafter. Idempotent: returns False
+    (no-op) if a persistent session is already running; True if it started
+    one. Fails fast if not logged in (FR-003) or if a non-persistent
+    container is already running for the project.
+    """
+    row = _registry_lookup(asdd_home, project_id)  # refuses archived
+    if project_container.is_persistent_running(project_id):
+        _emit_progress("serve", project_id=project_id, state="already-running")
+        return False
+
+    _require_login(asdd_home, interactive=False)
+    project_container.ensure_image_built()
+    project_container.assert_not_running(project_id)
+    # Clear any stale stopped container of the same name (persistent
+    # containers run without --rm, so one can linger after a crash/stop).
+    project_container.remove_container(project_id)
+
+    project_secrets = _decrypt_project_secrets(row)
+    pc_obj = project_container.ProjectContainer(
+        project_id=project_id,
+        mode="persistent",
+        workspace_path=Path(row["workspace_path"]),
+        asdd_home=asdd_home,
+    )
+    project_container.start_container(pc_obj, extra_env=project_secrets)
+    _write_restarts(asdd_home, project_id, 0)
+    try:
+        # Pin ASDD_HOME and PATH so the launchd babysitter (minimal env) can
+        # find docker, asdd, and any pipx/brew shims on the operator's PATH.
+        env_pins: dict[str, str] = {"ASDD_HOME": str(asdd_home)}
+        if path := os.environ.get("PATH"):
+            env_pins["PATH"] = path
+        supervisor.install(project_id, environ=env_pins)
+    except supervisor.SupervisorError as e:
+        raise BootstrapError(str(e)) from e
+    _emit_progress("serve", project_id=project_id, state="started")
+    return True
+
+
+def cmd_serve_supervise(*, asdd_home: Path, project_id: str) -> int:
+    """Foreground babysitter run by the launchd agent (spec 010).
+
+    Ensures the session container is up — counting a (re)start when it has to
+    bring it back — then blocks until the container exits. On return, launchd
+    (KeepAlive) relaunches this, which is what restarts a crashed session.
+    """
+    try:
+        if not project_container.is_running(project_id):
+            if project_container.exists(project_id):
+                project_container.start_existing(project_id)
+            else:
+                project_container.ensure_image_built()
+                _start_persistent_container(asdd_home, project_id)
+            _write_restarts(asdd_home, project_id, _read_restarts(asdd_home, project_id) + 1)
+            _emit_progress("supervise_restart", project_id=project_id)
+        return project_container.wait_container(project_id)
+    except (OSError, project_container.ProjectContainerError) as e:
+        # Log so launchd's stderr capture shows what failed, then exit non-zero
+        # so it's visible in `launchctl print`; KeepAlive relaunches regardless.
+        log.error("babysitter error for %r: %s", project_id, e)
+        return 1
+
+
+def cmd_attach(*, asdd_home: Path, project_id: str) -> int:
+    """Attach to a project's running persistent session (US3).
+
+    Returns claude's exit code. Refuses (does not start one) if no session is
+    running.
+    """
+    _registry_lookup(asdd_home, project_id)
+    if not project_container.is_persistent_running(project_id):
+        raise BootstrapError(
+            f"no persistent session running for {project_id!r}; "
+            f"start one with `asdd serve {project_id}`"
+        )
+    return project_container.attach_session(project_id)
+
+
+def cmd_stop(*, asdd_home: Path, project_id: str) -> bool:
+    """Authoritatively stop a persistent session (US4).
+
+    Disables the supervisor *first* (so it cannot relaunch), then stops and
+    removes the container so the restart policy cannot bring it back.
+    Idempotent; returns True iff something was running.
+    """
+    _registry_lookup(asdd_home, project_id)
+    try:
+        supervisor.uninstall(project_id)
+    except supervisor.SupervisorError as e:
+        raise BootstrapError(str(e)) from e
+    stopped = project_container.stop_container(project_id)
+    project_container.remove_container(project_id, force=True)
+    _emit_progress("stop", project_id=project_id, stopped=stopped)
+    return stopped
+
+
+def cmd_session_status(*, asdd_home: Path, project_id: str) -> dict[str, Any]:
+    """Derived session status — no network call (US2 / FR-011)."""
+    _registry_lookup(asdd_home, project_id)
+    return {
+        "project_id": project_id,
+        "running": project_container.is_running(project_id),
+        "mode": project_container.running_mode(project_id),
+        # Restarts are counted by the babysitter (Docker's RestartCount is
+        # unusable here — the babysitter, not the restart policy, restarts it).
+        "restart_count": _read_restarts(asdd_home, project_id),
+        "state": project_container.state(project_id),
+        "supervised": supervisor.is_installed(project_id),
+    }
+
+
+# ---------------------------------------------------------------------------
 # Click CLI surface
 # ---------------------------------------------------------------------------
 
@@ -570,7 +844,7 @@ def _asdd_home_from_env() -> Path:
 
 
 @click.group(help="ASDD platform management CLI.")
-@click.version_option(package_name="controlvault-agent")
+@click.version_option(package_name="asdd")
 def cli() -> None:
     logging.basicConfig(level=logging.INFO, format="%(message)s")
 
@@ -701,6 +975,87 @@ def _cli_close(project_id: str) -> None:
         click.echo(f"Project {project_id!r} was not running")
 
 
+@cli.command("serve", help="Start a project's persistent supervised session.")
+@click.argument("project_id")
+@click.option(
+    "--supervise",
+    is_flag=True,
+    hidden=True,
+    default=False,
+    help="Internal: run the foreground launchd babysitter (do not call directly).",
+)
+def _cli_serve(project_id: str, supervise: bool) -> None:
+    home = _asdd_home_from_env()
+    if supervise:
+        # Foreground babysitter invoked by the launchd agent. Block until the
+        # container exits, then exit so launchd (KeepAlive) relaunches us.
+        cmd_serve_supervise(asdd_home=home, project_id=project_id)
+        sys.exit(0)
+    try:
+        started = cmd_serve(asdd_home=home, project_id=project_id)
+    except (BootstrapError, project_container.ProjectContainerError, supervisor.SupervisorError) as e:
+        click.echo(f"error: {e}", err=True)
+        sys.exit(1)
+    except project_container.AlreadyRunningError as e:
+        click.echo(f"error: {e}", err=True)
+        sys.exit(1)
+    click.echo(
+        f"session for {project_id!r} started"
+        if started
+        else f"session for {project_id!r} already running"
+    )
+
+
+@cli.command("attach", help="Attach to a project's running persistent session.")
+@click.argument("project_id")
+def _cli_attach(project_id: str) -> None:
+    home = _asdd_home_from_env()
+    try:
+        rc = cmd_attach(asdd_home=home, project_id=project_id)
+    except (BootstrapError, project_container.ProjectContainerError) as e:
+        click.echo(f"error: {e}", err=True)
+        sys.exit(1)
+    sys.exit(rc)
+
+
+@cli.command("stop", help="Stop a persistent session and disable its supervisor.")
+@click.argument("project_id")
+def _cli_stop(project_id: str) -> None:
+    home = _asdd_home_from_env()
+    try:
+        stopped = cmd_stop(asdd_home=home, project_id=project_id)
+    except (BootstrapError, project_container.ProjectContainerError, supervisor.SupervisorError) as e:
+        click.echo(f"error: {e}", err=True)
+        sys.exit(1)
+    click.echo(
+        f"session for {project_id!r} stopped"
+        if stopped
+        else f"session for {project_id!r} was not running (supervisor cleared)"
+    )
+
+
+@cli.group("session", help="Inspect persistent sessions.")
+def _cli_session() -> None:
+    pass
+
+
+@_cli_session.command("status", help="Show a project's persistent-session status.")
+@click.argument("project_id")
+def _cli_session_status(project_id: str) -> None:
+    home = _asdd_home_from_env()
+    try:
+        st = cmd_session_status(asdd_home=home, project_id=project_id)
+    except BootstrapError as e:
+        click.echo(f"error: {e}", err=True)
+        sys.exit(1)
+    click.echo(f"project:       {st['project_id']}")
+    click.echo(f"running:       {st['running']}")
+    click.echo(f"mode:          {st['mode'] or '-'}")
+    click.echo(f"restart_count: {st['restart_count'] if st['restart_count'] is not None else '-'}")
+    click.echo(f"state:         {st['state'] or '-'}")
+    click.echo(f"supervised:    {st['supervised']}")
+
+
 @cli.command("ps", help="List running project containers.")
 def _cli_ps() -> None:
     rows = cmd_ps()
@@ -712,6 +1067,47 @@ def _cli_ps() -> None:
         click.echo(
             f"{r['project_id']:24} {r['mode']:12} {r['started_at']:24}"
         )
+
+
+@cli.command("login", help="Establish the Claude subscription credential store.")
+@click.option(
+    "--fresh",
+    is_flag=True,
+    default=False,
+    help="Ignore any host login and log in fresh inside a container.",
+)
+def _cli_login(fresh: bool) -> None:
+    home = _asdd_home_from_env()
+    try:
+        source = cmd_login(asdd_home=home, fresh=fresh)
+    except BootstrapError as e:
+        click.echo(f"error: {e}", err=True)
+        sys.exit(1)
+    except project_container.ProjectContainerError as e:
+        click.echo(f"error: {e}", err=True)
+        sys.exit(1)
+    click.echo(f"logged in (source: {source})")
+
+
+@cli.command("logout", help="Remove the Claude subscription credential store.")
+def _cli_logout() -> None:
+    home = _asdd_home_from_env()
+    removed = cmd_logout(asdd_home=home)
+    click.echo("logged out" if removed else "already logged out")
+
+
+@cli.command("whoami", help="Show Claude subscription auth status (no network call).")
+def _cli_whoami() -> None:
+    home = _asdd_home_from_env()
+    st = cmd_whoami(asdd_home=home)
+    if not st.logged_in:
+        click.echo("not logged in — run `asdd login`", err=True)
+        sys.exit(1)
+    click.echo(f"logged_in: true (source: {st.source or 'unknown'})")
+    if st.identity:
+        click.echo(f"identity: {st.identity}")
+    if st.expiry:
+        click.echo(f"expiry: {st.expiry}")
 
 
 @cli.group("secrets", help="Manage per-project encrypted secrets (SOPS+age).")
@@ -795,11 +1191,24 @@ def _cli_secrets_list(project_id: str) -> None:
 )
 @click.argument("project_id")
 @click.argument("job_path", type=click.Path(exists=True, dir_okay=False, path_type=Path))
-def _cli_dispatch(project_id: str, job_path: Path) -> None:
+@click.option(
+    "--api-key",
+    "use_api_key",
+    is_flag=True,
+    default=False,
+    help="Bill this run to $ANTHROPIC_API_KEY instead of the subscription "
+    "(also honours ASDD_USE_API_KEY=1). Suppresses the credential-store mount.",
+)
+def _cli_dispatch(project_id: str, job_path: Path, use_api_key: bool) -> None:
     home = _asdd_home_from_env()
+    if os.environ.get("ASDD_USE_API_KEY") == "1":
+        use_api_key = True
     try:
         result_file = cmd_dispatch(
-            asdd_home=home, project_id=project_id, job_path=job_path
+            asdd_home=home,
+            project_id=project_id,
+            job_path=job_path,
+            use_api_key=use_api_key,
         )
     except BootstrapError as e:
         click.echo(f"error: {e}", err=True)

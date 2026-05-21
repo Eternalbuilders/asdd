@@ -79,3 +79,26 @@ this repo is established as the source of truth.
 
 Fresh `git init`. No filter-repo'd history. The original commits that
 touched asdd are still in the upstream repo if archaeology is needed.
+
+## Where to push (when ready)
+
+Not pushed anywhere yet. When the user is ready:
+
+```bash
+cd /workspace/asdd-repo
+gh repo create asdd --private --source=. --remote=origin --push
+```
+
+Owner can be `Eternalbuilders/` (their org, used for vaultcontrol) or
+personal — ask first.
+
+## Open follow-ups (as of 2026-05-20)
+
+- Push to a remote (see above).
+- Delete `asdd/`, `specs/007-…/`, and `specs/008-…/` from the
+  `vaultcontrol` repo once this one is confirmed stable.
+- Decide whether to set up a CI gate (`make pr-check` analog from
+  vaultcontrol's spec 017) for this repo.
+- The kernel→asdd dispatch integration (vaultcontrol's spec 007 US3/US4)
+  is still deferred. If revived, decide whether kernel calls asdd as a
+  subprocess or imports it as a Python package.

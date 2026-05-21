@@ -5,15 +5,23 @@ Linux container with git, Claude Code, `uv`, and the spec-kit slash
 commands preinstalled. Open a project's environment with one command;
 the host filesystem outside the project is invisible from inside.
 
-Two modes:
+Authentication is your **Claude subscription**, established once with
+`asdd login` and reused by every mode (no API key required). Credentials
+live in an asdd-owned store under `$ASDD_HOME/_state/claude-auth/`. See
+USER_GUIDE.md §6a.
+
+Three modes:
 - **Interactive** — `asdd open <id>` drops you into a bash shell inside
-  the project's container with your Claude Code subscription auth
-  bind-mounted in. Type `claude`, use `/speckit-*` slash commands.
+  the project's container with your subscription auth mounted in. Type
+  `claude`, use `/speckit-*` slash commands.
 - **Autonomous** — `asdd dispatch <id> <job.md>` runs one markdown
-  "job-note" through `claude --print` inside the container, writes the
-  result, and stops. No subscription auth involved — uses
-  `ANTHROPIC_API_KEY` instead, so scheduled work can't drain your
-  subscription quota.
+  "job-note" through `claude --print` inside the container on your
+  subscription, writes the result, and stops. Pass `--api-key` to bill a
+  specific run to `ANTHROPIC_API_KEY` instead.
+- **Persistent** — `asdd serve <id>` keeps a supervised Claude session
+  running on the Mac: it survives detach, auto-restarts on crash/reboot,
+  and resumes its conversation. `asdd attach`/`asdd stop` connect and
+  shut it down. No inbound network port is opened.
 
 ---
 
@@ -116,7 +124,7 @@ make clean       # remove build artifacts
 | Python 3.12+ | `pyproject.toml` requires it |
 | `pipx` (recommended) | Cleanest way to install the CLI |
 | `git` | `asdd new --from-remote` clones GitHub repos |
-| Claude Code (`@anthropic-ai/claude-code`) | Logged in once on the host; auth bind-mounted into containers |
+| Claude Code (`@anthropic-ai/claude-code`) | Logged in once via `asdd login`; subscription auth stored under `$ASDD_HOME/_state/claude-auth/` and mounted into containers |
 
 You do **not** need `uv`, `sops`, `age`, or `node` on the host — those
 are inside the project image.
