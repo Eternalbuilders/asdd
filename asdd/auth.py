@@ -176,6 +176,39 @@ def mark_fresh_login(asdd_home: Path) -> None:
     _write_meta(asdd_home, source=SOURCE_FRESH)
 
 
+def ensure_workspace_trusted(asdd_home: Path, workdir: str) -> None:
+    """Pre-accept Claude Code's workspace-trust dialog for ``workdir`` (spec 010).
+
+    A persistent session starts an *interactive* ``claude`` unattended (launchd
+    babysitter, no human at the keyboard). Claude shows a one-time "trust this
+    folder?" prompt on first launch in a directory, which would block that
+    start. We record acceptance for the in-container workspace path in the
+    store's ``claude.json`` (the file mounted at the container's
+    ``~/.claude.json``) so the prompt never appears. Idempotent; merges into
+    whatever config already exists rather than clobbering it.
+    """
+    p = store_json_path(asdd_home)
+    try:
+        data = json.loads(p.read_text()) if p.is_file() else {}
+    except (OSError, json.JSONDecodeError):
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    projects = data.get("projects")
+    if not isinstance(projects, dict):
+        projects = {}
+        data["projects"] = projects
+    entry = projects.get(workdir)
+    if not isinstance(entry, dict):
+        entry = {}
+        projects[workdir] = entry
+    entry["hasTrustDialogAccepted"] = True
+
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(data, indent=2) + "\n")
+    os.chmod(p, 0o600)
+
+
 def clear(asdd_home: Path) -> bool:
     """Remove the credential store. Idempotent; returns True iff it existed."""
     d = store_dir(asdd_home)
@@ -300,6 +333,7 @@ __all__ = [
     "AuthStatus",
     "clear",
     "credentials_file",
+    "ensure_workspace_trusted",
     "has_credential",
     "host_login_present",
     "is_logged_in",

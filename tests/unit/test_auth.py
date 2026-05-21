@@ -46,6 +46,25 @@ def test_store_paths(tmp_path: Path) -> None:
     assert auth.store_claude_dir(home) == auth.store_dir(home) / "claude"
 
 
+def test_ensure_workspace_trusted_creates_and_merges(tmp_path: Path) -> None:
+    home = tmp_path / "asdd-home"
+    # Pre-existing config must be preserved (merge, not clobber).
+    auth.prepare_empty_store(home)
+    auth.store_json_path(home).write_text(json.dumps({"oauthAccount": {"email": "m@x.no"}}))
+
+    auth.ensure_workspace_trusted(home, "/asdd_home")
+    data = json.loads(auth.store_json_path(home).read_text())
+    assert data["projects"]["/asdd_home"]["hasTrustDialogAccepted"] is True
+    assert data["oauthAccount"]["email"] == "m@x.no"  # untouched
+
+    # Idempotent and does not disturb other projects.
+    auth.ensure_workspace_trusted(home, "/asdd_home")
+    data = json.loads(auth.store_json_path(home).read_text())
+    assert list(data["projects"]) == ["/asdd_home"]
+    # 0600 — the store holds the live login config.
+    assert stat.S_IMODE(auth.store_json_path(home).stat().st_mode) == 0o600
+
+
 def test_not_logged_in_on_empty_home(tmp_path: Path) -> None:
     assert auth.is_logged_in(tmp_path / "asdd-home") is False
     st = auth.status(tmp_path / "asdd-home")

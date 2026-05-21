@@ -38,7 +38,7 @@ def _running(name: str) -> int:
     return len([ln for ln in r.stdout.splitlines() if ln.strip()])
 
 
-def _start_persistent(asdd_home: Path, project_id: str) -> None:
+def _start_persistent(asdd_home: Path, project_id: str, monkeypatch=None) -> None:
     pc.ensure_image_built()
     pc.remove_container(project_id, force=True)
     obj = pc.ProjectContainer(
@@ -47,11 +47,16 @@ def _start_persistent(asdd_home: Path, project_id: str) -> None:
         workspace_path=asdd_home / "projects" / project_id,
         asdd_home=asdd_home,
     )
+    # Hold the session container up with a sleep instead of a live `claude
+    # --remote-control` (no LLM/login in CI) so the restart primitive is what
+    # gets exercised.
+    if monkeypatch is not None:
+        monkeypatch.setenv("ASDD_SESSION_STUB", "1")
     pc.start_container(obj)
 
 
 def test_persistent_container_persists_and_can_be_restarted(
-    asdd_home_with_project: Path,
+    asdd_home_with_project: Path, monkeypatch
 ) -> None:
     """Container-level primitive the launchd babysitter relies on: after a
     kill the persistent container is NOT auto-removed (no --rm) and can be
@@ -60,7 +65,7 @@ def test_persistent_container_persists_and_can_be_restarted(
     pid = "vaultcontrol"
     name = pc.container_name(pid)
     _seed_store(asdd_home_with_project)
-    _start_persistent(asdd_home_with_project, pid)
+    _start_persistent(asdd_home_with_project, pid, monkeypatch)
     try:
         assert pc.is_persistent_running(pid)
         subprocess.run(["docker", "kill", name], capture_output=True)
@@ -86,7 +91,7 @@ def test_dispatch_reuses_persistent_container(asdd_home_with_project: Path, monk
     job.write_text("# job\n")
     monkeypatch.setenv("ASDD_JOB_STUB_OUTPUT", "reused")
 
-    _start_persistent(asdd_home_with_project, pid)
+    _start_persistent(asdd_home_with_project, pid, monkeypatch)
     try:
         result = bootstrap.cmd_dispatch(
             asdd_home=asdd_home_with_project, project_id=pid, job_path=job

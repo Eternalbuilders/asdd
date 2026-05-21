@@ -151,6 +151,9 @@ def test_persistent_start_omits_rm_and_restart(
     argv = calls[0]
     assert "--rm" not in argv
     assert "--restart" not in argv
+    # Main process is the tmux-held remote-control session, named by project.
+    assert argv[-2:] == [pc.IMAGE_NAME, "asdd-session"]
+    assert "ASDD_PROJECT_ID=p" in argv
 
 
 def test_wait_and_start_existing_argv(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -178,6 +181,8 @@ def test_interactive_and_autonomous_still_use_rm(
         pc.start_container(obj)
         assert "--rm" in calls[0]
         assert "--restart" not in calls[0]
+        # Non-persistent containers stay warm; the caller execs into them.
+        assert calls[0][-2:] == ["sleep", "infinity"]
 
 
 def test_attach_session_argv(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -189,7 +194,17 @@ def test_attach_session_argv(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(pc.subprocess, "run", fake_run)
     pc.attach_session("hello")
-    assert calls[0] == ["docker", "exec", "-it", pc.container_name("hello"), "claude", "--continue"]
+    # Re-attaches to the tmux-held remote-control session (not a fresh claude).
+    assert calls[0] == [
+        "docker",
+        "exec",
+        "-it",
+        pc.container_name("hello"),
+        "tmux",
+        "attach",
+        "-t",
+        pc.SESSION_TMUX_NAME,
+    ]
 
 
 def test_restart_count_and_state_parse(monkeypatch: pytest.MonkeyPatch) -> None:

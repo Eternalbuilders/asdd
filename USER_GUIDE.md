@@ -293,27 +293,39 @@ Useful for verifying the dispatch pipeline end-to-end without spending tokens.
 
 ## 8c. Keep a session always-on (workflow 3: persistent / remote-control)
 
-A persistent session stays running on the Mac, survives closing your
-terminal, auto-restarts if it crashes or after a reboot, and resumes its
-conversation. It runs on your subscription (spec 009) — no API key.
+A persistent session is ONE long-lived Claude conversation that stays running
+on the Mac: it survives closing your terminal, auto-restarts if it crashes or
+after a reboot, resumes its conversation, **and is reachable from the Claude
+mobile app / claude.ai**. It runs on your subscription (spec 009) — no API key.
 
 ```bash
 asdd serve hello-world          # start a supervised persistent session
-asdd attach hello-world         # connect (claude --continue); Ctrl-D detaches, session keeps running
+asdd attach hello-world         # re-attach your terminal (tmux); Ctrl-b d detaches, session keeps running
 asdd session status hello-world # running? restart_count? supervised?
 asdd stop hello-world           # the ONLY way it stays down (also disables the supervisor)
 ```
 
-How the "always-on" works:
+Connecting from your phone: the session is registered with Anthropic over an
+**outbound** connection (Claude Code's Remote Control) — it shows up in the
+session list on mobile/web automatically, with no inbound port opened on the
+Mac. The session URL/QR is also printed in the container log
+(`docker logs asdd-project-<id>`).
+
+How it works under the hood:
+- The container's main process is a `tmux` session running one interactive
+  `claude --remote-control`. tmux keeps that single session alive with no
+  client attached, so it stays mobile-visible AND is locally re-attachable.
+  `asdd attach` / `asdd open` run `tmux attach`, dropping you into the *same*
+  conversation (mobile and your terminal share it — they stay in sync, but
+  don't type in both at once).
 - A per-project launchd agent (`~/Library/LaunchAgents/com.asdd.session.<id>.plist`)
   runs `asdd serve <id> --supervise` as a foreground babysitter. When the
   container exits (crash, OOM, daemon restart), the babysitter exits too and
-  launchd's `KeepAlive` relaunches it — which restarts the container.
-  `RunAtLoad` brings it back on login/reboot. The supervisor is host-side only
-  and opens **no** network port.
+  launchd's `KeepAlive` relaunches it — which restarts the container and
+  resumes the conversation (`--continue`). `RunAtLoad` brings it back on
+  login/reboot. The supervisor is host-side only and opens **no** inbound port.
 - While a session is up, `asdd dispatch <id>` runs the job **inside** the
-  warm container and `asdd open <id>` attaches to it — one container per
-  project, reused.
+  warm container — one container per project, reused.
 
 Stopping is authoritative: `asdd stop` disables the launchd agent first,
 then removes the container, so it does not come back until you `serve` again.

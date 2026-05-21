@@ -736,6 +736,9 @@ def cmd_serve(*, asdd_home: Path, project_id: str) -> bool:
     # Clear any stale stopped container of the same name (persistent
     # containers run without --rm, so one can linger after a crash/stop).
     project_container.remove_container(project_id)
+    # Pre-accept the workspace-trust dialog so the unattended (launchd-started)
+    # interactive `claude --remote-control` doesn't block on it (spec 010).
+    auth.ensure_workspace_trusted(asdd_home, project_container.IN_CONTAINER_WORKDIR)
 
     project_secrets = _decrypt_project_secrets(row)
     pc_obj = project_container.ProjectContainer(

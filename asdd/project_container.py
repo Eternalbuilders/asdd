@@ -190,6 +190,11 @@ def ensure_image_built(
 # set so integration tests get a deterministic result without a live LLM.
 _API_KEY_ENV = "ANTHROPIC_API_KEY"
 _STUB_OUTPUT_ENV = "ASDD_JOB_STUB_OUTPUT"
+# Persistent-session (spec 010) container env. ASDD_PROJECT_ID names the
+# remote-control session; ASDD_SESSION_STUB makes asdd-session run a sleep
+# instead of claude so the restart primitive can be tested without a live LLM.
+_PROJECT_ID_ENV = "ASDD_PROJECT_ID"
+_SESSION_STUB_ENV = "ASDD_SESSION_STUB"
 
 
 def start_container(
@@ -257,7 +262,20 @@ def start_container(
         for name, value in extra_env.items():
             cmd += ["-e", f"{name}={value}"]
 
-    cmd += [pc.image, "sleep", "infinity"]
+    if pc.mode == "persistent":
+        # The session container's main process runs the tmux-held
+        # `claude --remote-control` (spec 010); name it after the project and
+        # propagate the session stub so integration tests can hold it up
+        # without a live LLM.
+        cmd += ["-e", f"{_PROJECT_ID_ENV}={pc.project_id}"]
+        session_stub = _os.environ.get(_SESSION_STUB_ENV)
+        if session_stub is not None:
+            cmd += ["-e", f"{_SESSION_STUB_ENV}={session_stub}"]
+        cmd += [pc.image, "asdd-session"]
+    else:
+        # Interactive / autonomous: keep the container warm; the caller execs
+        # bash or asdd-run-job into it.
+        cmd += [pc.image, "sleep", "infinity"]
 
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
@@ -329,16 +347,30 @@ def attach_shell(project_id: str) -> int:
     return result.returncode
 
 
-def attach_session(project_id: str) -> int:
-    """Attach an interactive Claude session to a running container (spec 010).
+SESSION_TMUX_NAME = "asdd"
 
-    Runs ``claude --continue`` so the conversation resumes from the history
-    persisted in the mounted ``~/.claude`` store — giving continuity across
-    container restarts. Detaching ends only this exec; the container (and
-    thus the persistent session) keeps running. Returns claude's exit code.
+
+def attach_session(project_id: str) -> int:
+    """Re-attach the operator's terminal to the running persistent session (spec 010).
+
+    The session container runs ONE long-lived ``claude --remote-control`` inside
+    a tmux session (see ``asdd-session``); this connects to that same session
+    via ``tmux attach`` so the operator continues the existing conversation —
+    the very one that is also visible on mobile/web. Detaching the tmux client
+    (Ctrl-b d) ends only this exec; claude (and thus the session) keeps running.
+    Returns tmux's exit code.
     """
     result = subprocess.run(
-        ["docker", "exec", "-it", container_name(project_id), "claude", "--continue"],
+        [
+            "docker",
+            "exec",
+            "-it",
+            container_name(project_id),
+            "tmux",
+            "attach",
+            "-t",
+            SESSION_TMUX_NAME,
+        ],
         check=False,
     )
     return result.returncode

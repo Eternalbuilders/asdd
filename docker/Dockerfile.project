@@ -29,6 +29,7 @@ RUN apt-get update \
         npm \
         ripgrep \
         sqlite3 \
+        tmux \
         vim-tiny \
     && rm -rf /var/lib/apt/lists/*
 
@@ -83,6 +84,12 @@ COPY project_skeleton/ /app/project_skeleton/
 # Explicit 0755 (not `chmod +x`, which is umask-sensitive) so the non-root
 # `asdd` user can execute it — the source script is mode 0600.
 COPY --chmod=0755 docker/files/asdd-run-job.sh /usr/local/bin/asdd-run-job
+
+# Main process for a persistent-mode session container (spec 010): a tmux-held
+# interactive `claude --remote-control` the operator can re-attach to locally
+# and drive from mobile. Explicit 0755 (source is 0600) so the non-root user
+# can execute it.
+COPY --chmod=0755 docker/files/asdd-session.sh /usr/local/bin/asdd-session
 
 RUN pip install --no-cache-dir -e .
 
