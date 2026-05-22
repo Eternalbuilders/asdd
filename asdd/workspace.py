@@ -130,10 +130,29 @@ def scaffold(workspace_path: Path, *, templates_root: Path) -> None:
 
     # 3. Empty queue dirs.
     for d in _QUEUE_DIRS:
-        (workspace_path / d).mkdir(parents=True, exist_ok=True)
+        _ensure_dir(workspace_path / d)
 
     # 4. specs/ directory (empty — first /speckit-specify fills it).
-    (workspace_path / "specs").mkdir(parents=True, exist_ok=True)
+    _ensure_dir(workspace_path / "specs")
+
+
+def _ensure_dir(path: Path) -> None:
+    """`mkdir -p` that tolerates an entry the cloned remote already provides.
+
+    `Path.mkdir(exist_ok=True)` still raises ``FileExistsError`` when the path
+    exists as a *non-directory*. The case that bites here: a cloned repo whose
+    ``specs`` is a symlink to an external store (e.g. a spec vault) that does
+    not exist on this host — a dangling symlink. Such an entry can't serve as
+    the scaffold directory, so we replace it with a real one. A symlink that
+    resolves, or an existing real dir/file, is left untouched.
+    """
+    if path.is_symlink():
+        if path.exists():  # resolves to a real target — leave the clone's link
+            return
+        path.unlink()  # dangling — drop it so we can create a usable dir
+    elif path.exists():
+        return
+    path.mkdir(parents=True, exist_ok=True)
 
 
 __all__ = ["SpecifyInitError", "scaffold"]
