@@ -48,15 +48,17 @@ runtime. Schemas live in `asdd/contracts/`, project templates live in
 `/speckit-*` slash commands and human spec authoring, both of which
 happen inside the container.
 
-`make bundle` deliberately **excludes `specs/`** from the deploy
-tarball — specs aren't install material.
+Deployment is a plain `git clone` + `pipx install --editable .` (there is
+no tarball bundle). The `specs/` symlink is git-tracked, so it comes along
+in the clone and simply dangles on the Mac — harmless, since runtime asdd
+never reads it.
 
 This repo therefore has two natural environments:
 
 | Environment | Where | What works |
 | --- | --- | --- |
 | Dev (in-container) | `/workspace/asdd-repo/` | Everything: code, tests, `specs/` symlink, `/speckit-*` slash commands |
-| Deploy (Mac) | wherever the bundle gets unpacked | asdd CLI + container image build. No `specs/` symlink. |
+| Deploy (Mac) | the cloned repo (e.g. `~/asdd/`) | asdd CLI + container image build. `specs/` symlink dangles harmlessly. |
 
 ## What was deliberately left behind
 
