@@ -13,9 +13,9 @@ lives in :mod:`asdd.project_container`; the CLI commands live in
 :mod:`asdd.bootstrap`.
 
 Security (spec 009 FR-008/FR-009, constitution V): the store holds live
-OAuth tokens. It lives outside any project workspace, is git-ignored,
-excluded from archives and the deploy bundle, created ``0700``/``0600``,
-and never logged. ``status`` returns metadata only — never token values.
+OAuth tokens. It lives outside any project workspace, is git-ignored
+(so it never travels in a clone) and excluded from archives, created
+``0700``/``0600``, and never logged. ``status`` returns metadata only — never token values.
 """
 
 from __future__ import annotations

@@ -73,7 +73,6 @@ Mac is only a deploy target, never a dev environment.
 ```bash
 make test     # pytest — unit always; integration skips without a docker daemon
 make lint     # ruff check
-make bundle   # build asdd-bundle.tar.gz for deployment
 make clean    # remove build artifacts
 ```
 
@@ -85,16 +84,17 @@ PYTHONPATH=. python3.12 -m asdd.bootstrap --help
 
 The `specs/` symlink points at a master spec store that lives outside git, so
 `/speckit-*` slash commands run from this repo write spec docs through to that
-store. It is excluded from `make bundle` and dangles harmlessly in any clone
-that doesn't have that store mounted; the runtime never reads `specs/` (schemas
-ship in `asdd/contracts/`).
+store. The symlink is git-tracked, so it travels in a clone and dangles
+harmlessly wherever that store isn't mounted; the runtime never reads `specs/`
+(schemas ship in `asdd/contracts/`).
 
-## Build and deploy
+## Deploy
 
-`make bundle` produces `asdd-bundle.tar.gz` (~50 KB) — the CLI plus only the
-files it needs at runtime. Unpack it on a Mac and `pipx install --editable .`
-(see [USER_GUIDE.md](USER_GUIDE.md) for the full install). The bundle is the
-only deploy artifact; the Mac does not run this dev workflow.
+Deployment is a plain `git clone` on the target Mac followed by `pipx install
+--editable .` (see [USER_GUIDE.md](USER_GUIDE.md) for the full install). The
+editable install resolves the Dockerfile and template paths from the clone, so
+the checkout is the install — keep it in place and `git pull` to update. The
+Mac does not run this dev workflow.
 
 ## Dependencies
 

@@ -29,28 +29,28 @@ through your first project end to end.
 
 ---
 
-## 1. What's in this bundle
+## 1. What's in the repo
+
+You install ASDD by cloning the repo (§3). The parts that matter at runtime:
 
 ```
-asdd-bundle/
-├── USER_GUIDE.md                  ← this file
-├── README.md
-├── pyproject.toml                 ← installs the `asdd` console script
-├── asdd/                          ← the CLI Python package
-│   └── contracts/                 ← JSON schemas asdd reads at import time
-├── docker/
-│   ├── Dockerfile.project         ← project-container image
-│   └── files/
-│       ├── asdd-run-job.sh        ← in-container job runner (dispatch)
-│       └── asdd-session.sh        ← in-container persistent-session entrypoint
-└── project_skeleton/              ← scaffold copied into every new project
+asdd/                          ← the CLI Python package
+└── contracts/                 ← JSON schemas asdd reads at import time
+docker/
+├── Dockerfile.project         ← project-container image
+└── files/
+    ├── asdd-run-job.sh        ← in-container job runner (dispatch)
+    └── asdd-session.sh        ← in-container persistent-session entrypoint
+project_skeleton/              ← scaffold copied into every new project
+pyproject.toml                 ← installs the `asdd` console script
+specs/                         ← symlink to a dev-only spec store; dangles on a
+                               ← Mac clone, which is fine — runtime never reads it
 ```
 
-The unpacked directory **is** your ASDD source tree on this machine. Don't
-delete or move it after install — the CLI computes paths relative to where this
-tree lives (the Dockerfile from `<bundle>/docker/`, the scaffold from
-`<bundle>/project_skeleton/`, the schemas from `<bundle>/asdd/contracts/`). A
-good home is `~/asdd/`.
+The clone **is** your ASDD source tree on this machine. Don't delete or move it
+after install — the CLI computes paths relative to where this tree lives (the
+Dockerfile from `<repo>/docker/`, the scaffold from `<repo>/project_skeleton/`,
+the schemas from `<repo>/asdd/contracts/`). A good home is `~/asdd/`.
 
 Python dependencies installed by `pip`/`pipx`: `PyYAML`, `jsonschema`, `click`.
 That's it.
@@ -59,23 +59,69 @@ That's it.
 
 ## 2. Host prerequisites
 
-Install these on the target Mac, in this order, before running any `asdd`
-command:
+Everything below is installed with Homebrew. Run the steps in order on the
+target Mac before any `asdd` command.
 
-1. **Docker or OrbStack** — the CLI shells out to `docker build` / `docker run`,
-   and your sessions run as containers. [OrbStack](https://orbstack.dev/) is
-   recommended on macOS (lighter and faster); Docker Desktop also works.
-2. **Homebrew** — the simplest way to install the rest. See https://brew.sh if
-   you don't already have it.
-3. **Python 3.12+** — `asdd` requires it: `brew install python@3.12`.
-4. **pipx** — cleanest way to install a console script in isolation:
-   `brew install pipx && pipx ensurepath`.
-5. **git** — `asdd new --from-remote` clones repos with it: `brew install git`
-   (the Xcode Command Line Tools also provide it).
+### 2.1 Homebrew
+
+```bash
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+```
+
+If you already have it, skip this. (See https://brew.sh.)
+
+### 2.2 A Docker engine (Colima)
+
+`asdd` shells out to `docker build` / `docker run`, so you need a running Docker
+engine. [OrbStack](https://orbstack.dev/) is the smoothest option on macOS but
+its licence is free **for personal use only**, so this guide uses **Colima**,
+which is open source and unrestricted. (Docker Desktop also works and carries
+its own licensing terms.)
+
+```bash
+brew install colima docker docker-buildx
+
+# Register the Homebrew buildx plugin so `docker build` (buildkit) works.
+mkdir -p ~/.docker/cli-plugins
+ln -sfn "$(brew --prefix)/opt/docker-buildx/bin/docker-buildx" ~/.docker/cli-plugins/docker-buildx
+
+# Start the VM. Defaults are 2 CPU / 2 GB; bump it for comfortable
+# image builds + Claude Code sessions. `colima start` also points the
+# `docker` CLI at this VM automatically.
+colima start --cpu 4 --memory 8
+
+# Smoke-test the daemon (prints "Hello from Docker!", then exits cleanly).
+docker run --rm hello-world
+```
+
+> **Colima file-sharing caveat.** Unlike OrbStack, Colima only mounts your
+> **home directory** (and `/tmp/colima`) into its VM by default. `asdd`
+> bind-mounts `$ASDD_HOME/projects/<id>` into containers, so **`ASDD_HOME` must
+> live under your home directory** (the `~/asdd` default below is fine). Point
+> it somewhere outside `$HOME` and container mounts silently come up empty.
+
+Colima survives reboots only if you start it again (or `brew services start
+colima`). Stop the VM with `colima stop` when you don't need it.
+
+### 2.3 Python 3.12 and pipx
+
+```bash
+brew install python@3.12
+brew install pipx && pipx ensurepath
+```
+
+### 2.4 git
+
+`asdd new` runs `git` on the host (both `git clone` for `--from-remote` and
+`git init` for an empty project):
+
+```bash
+brew install git   # or use the git from Xcode Command Line Tools
+```
 
 You do **not** need `uv`, `sops`, `age`, `node`, or Claude Code on the host —
 those are all pre-installed inside the project image. You log in to Claude with
-`asdd login --fresh` (§6a), which runs the login *inside* a container, so
+`asdd login --fresh` (§4), which runs the login *inside* a container, so
 nothing about Claude has to exist on the host first.
 
 ### Do I need an Anthropic API key?
@@ -96,16 +142,16 @@ mounted for it. If you don't have that need, ignore the API key entirely.
 
 ---
 
-## 3. Install the ASDD CLI
+## 3. Install the ASDD CLI and initialise `ASDD_HOME`
 
 ```bash
-# 1. Pick a permanent home for the bundle and unpack into it.
-mkdir -p ~/asdd
-tar -xzf asdd-bundle.tar.gz -C ~/asdd --strip-components=1
+# 1. Clone the repo to a permanent home. This directory IS your install —
+#    don't move or delete it afterwards (the CLI resolves the Dockerfile and
+#    template paths relative to it).
+git clone https://github.com/Eternalbuilders/asdd.git ~/asdd
 cd ~/asdd
 
-# 2. Install in editable mode. Editable is REQUIRED — the CLI resolves the
-#    Dockerfile and template paths relative to this directory.
+# 2. Install in editable mode. Editable is REQUIRED — see above.
 pipx install --editable . --python python3.12
 # or, without pipx:
 #   python3.12 -m venv .venv && source .venv/bin/activate && pip install -e .
@@ -114,127 +160,49 @@ pipx install --editable . --python python3.12
 asdd --help
 ```
 
-You should see the `asdd` subcommands: `init`, `new`, `list`, `pause`,
-`resume`, `archive`, `open`, `close`, `ps`, `dispatch`, `secrets …`.
+Update later with a plain `git -C ~/asdd pull` (the editable install picks up
+the new code automatically — no reinstall needed).
+
+You should see the `asdd` subcommands: `init`, `new`, `list`, `open`, `close`,
+`ps`, `dispatch`, `serve`, `attach`, `stop`, `session`, `login`, `logout`,
+`whoami`, `secrets …`.
 
 ### Pick where projects live
 
-Set `ASDD_HOME` to the directory where projects, registry, and templates
-will land. Default is `~/Code/asdd`.
+Set `ASDD_HOME` to the directory where projects, registry, and templates will
+land. Default is `~/Code/asdd`. Keep it **under your home directory** (see the
+Colima caveat in §2.2).
 
 ```bash
 # In ~/.zshrc (persisted across shells)
-export ASDD_HOME=$HOME/AI-Hub/asdd
+export ASDD_HOME=$HOME/asdd-home
 ```
 
-Open a new shell so the variable takes effect.
-
----
-
-## 4. Initialise `ASDD_HOME`
+Open a new shell so the variable takes effect, then initialise it:
 
 ```bash
 asdd init
 ```
 
-This is idempotent and creates:
+`asdd init` is idempotent and creates:
 
 ```
 $ASDD_HOME/
 ├── _state/           ← projects.yml registry, audit.log
 ├── _archive/         ← archived projects (empty on day one)
 ├── projects/         ← per-project workspaces (one dir per project)
-└── _templates/       ← copied from the bundle's controlvault-skeleton/_templates/
+└── _templates/       ← copied from the repo's project_skeleton/
 ```
 
 ---
 
-## 5. Create a project that pulls in an existing GitHub repo
-
-`asdd new <id> --from-remote <git-url>` clones the repo into
-`$ASDD_HOME/projects/<id>/` and lays the spec-driven-development scaffolding
-(`.specify/`, `inbox/`, `jobs/`, `results/`, `schedule/`, `_state/`,
-`specs/`, a starter `constitution.md`) on top — on a **separate branch**
-called `asdd/bootstrap`, so your project's `main` stays untouched.
-
-```bash
-# Example: pull in github.com/octocat/Hello-World as a new ASDD project
-# called "hello-world".
-asdd new hello-world \
-  --from-remote https://github.com/octocat/Hello-World.git \
-  --name "Hello World" \
-  --description "First test project"
-```
-
-Verify:
-
-```bash
-asdd list
-# ID                       STATE        NAME
-# hello-world              active       Hello World
-
-ls $ASDD_HOME/projects/hello-world
-# .git  .specify  README  _state  inbox  jobs  results  schedule  specs
-```
-
-The repo's existing files are preserved on `main`; the scaffolding sits on
-`asdd/bootstrap`. Switch between them with normal git.
-
-> **First-time build note**: the next step (`asdd open` or `asdd dispatch`)
-> will trigger a one-time `docker build` of `asdd/project:latest`,
-> which takes ~30–60 seconds. The CLI streams the build output so it isn't
-> silent.
-
----
-
-## 6. Interactive Claude session inside the container
-
-```bash
-asdd open hello-world
-```
-
-You land at a bash prompt **inside** the container, at `/asdd_home`. The
-prompt looks like:
-
-```
-asdd@<container-id>:/asdd_home$
-```
-
-Three things are bind-mounted from your Mac:
-- the project workspace at `/asdd_home` (read/write)
-- your `~/.claude/` directory (so Claude Code is already logged in)
-- your `~/.claude.json` file (same reason)
-
-Everything else on the Mac is invisible — `ls /` won't show your home dir or
-other projects.
-
-Start an interactive Claude session:
-
-```
-asdd@…:/asdd_home$ claude
-> /speckit-specify add a /healthz endpoint
-```
-
-Spec-kit slash commands work out of the box because `.specify/integration.json`
-was wired in during `asdd new`.
-
-**To leave**, just `exit` the shell. The container stops automatically — no
-processes remain on the host (`docker ps` is empty).
-
-If you killed your terminal or lost the SSH connection, clean up manually:
-
-```bash
-asdd close hello-world
-```
-
----
-
-## 6a. First-time login (Claude subscription)
+## 4. Log in to Claude (subscription)
 
 asdd authenticates to Claude using **your Claude subscription**, established
-once and reused by every mode (interactive `open`, autonomous `dispatch`,
-and the persistent session). Credentials live in an asdd-owned store at
-`$ASDD_HOME/_state/claude-auth/` — never inside a project, never committed.
+once and reused by every mode (interactive `open`, autonomous `dispatch`, and
+the persistent session). Credentials live in an asdd-owned store at
+`$ASDD_HOME/_state/claude-auth/` — never inside a project, never committed. Do
+this once, before creating or running anything.
 
 ```bash
 asdd login           # seeds from your existing Mac ~/.claude login if present
@@ -248,84 +216,69 @@ asdd login --fresh   # drops you into a container running `claude`; complete
                      # the login (open the printed URL, paste the code), exit.
 ```
 
-Log out (e.g. handing off the machine) with `asdd logout`. After logout,
-every mode refuses Claude work until you log in again. The stored session
-refreshes itself automatically — including for unattended jobs — so a
-one-time login keeps working without re-authentication.
+Log out (e.g. handing off the machine) with `asdd logout`. After logout, every
+mode refuses Claude work until you log in again. The stored session refreshes
+itself automatically — including for unattended jobs — so a one-time login
+keeps working without re-authentication.
 
-`ANTHROPIC_API_KEY` is no longer required for routine work; it is an opt-in
-override (see §8) for billing a specific run to metered usage instead.
-
----
-
-## 7. Define a job for autonomous execution
-
-A "job" is **just a markdown file** whose body is piped to `claude --print`
-inside the container. No frontmatter is required.
-
-Constraints:
-1. The file must exist.
-2. The path must be **under** that project's workspace (i.e. somewhere inside
-   `$ASDD_HOME/projects/<id>/`), because that's the only path the container
-   can see.
-
-Convention is to drop job-notes into `inbox/`:
-
-```bash
-mkdir -p $ASDD_HOME/projects/hello-world/inbox
-
-cat > $ASDD_HOME/projects/hello-world/inbox/audit.md <<'EOF'
-# job: dependency audit
-
-Read package.json, list every dependency, and flag any that have
-not had a release in the last 24 months. Output a short markdown table.
-EOF
-```
+`ANTHROPIC_API_KEY` is not required for routine work; it is an opt-in override
+(see §8) for billing a specific run to metered usage instead.
 
 ---
 
-## 8. Run a job now (one-shot dispatch)
+## 5. Create a project
+
+A project is a workspace under `$ASDD_HOME/projects/<id>/` plus a registry
+entry. `asdd new` lays the spec-driven-development scaffolding (`.specify/`,
+`inbox/`, `jobs/`, `results/`, `schedule/`, `_state/`, `specs/`, a starter
+`constitution.md`) into it. You can start empty or from an existing repo.
+
+### From scratch
 
 ```bash
-# Production: runs on your Claude subscription, using the login you
-# established with `asdd login` (see §6a). No API key needed.
-asdd dispatch hello-world \
-  $ASDD_HOME/projects/hello-world/inbox/audit.md
+asdd new hello-world \
+  --name "Hello World" \
+  --description "First test project"
 ```
 
-What happens:
-1. The project's container starts in **autonomous mode** (workspace mount
-   plus your asdd-owned subscription credential store).
-2. `asdd-run-job` reads the markdown file and pipes its body to
-   `claude --print`, authenticated on your subscription.
-3. Claude's stdout is written to
-   `$ASDD_HOME/projects/hello-world/results/audit.result.md`.
-4. The container stops. `docker ps` is empty again.
+This `git init`s a fresh repo on `main` and commits the scaffolding.
 
-The CLI prints the result path to stdout. If you have not logged in, the
-dispatch fails fast and tells you to run `asdd login`.
+### From an existing GitHub repo
 
-### Bill a single run to an API key instead
+`asdd new <id> --from-remote <git-url>` clones the repo into
+`$ASDD_HOME/projects/<id>/` and lays the same scaffolding on top — on a
+**separate branch** called `asdd/bootstrap`, so your project's `main` stays
+untouched.
 
 ```bash
-ANTHROPIC_API_KEY=sk-ant-… asdd dispatch hello-world \
-  $ASDD_HOME/projects/hello-world/inbox/audit.md --api-key
-# This run uses metered billing; the subscription store is NOT mounted.
+# Example: pull in github.com/octocat/Hello-World as a new ASDD project.
+asdd new hello-world \
+  --from-remote https://github.com/octocat/Hello-World.git \
+  --name "Hello World" \
+  --description "First test project"
 ```
 
-### Test path (no LLM calls / no API key / no login)
+The repo's existing files are preserved on `main`; the scaffolding sits on
+`asdd/bootstrap`. Switch between them with normal git.
+
+Verify either way:
 
 ```bash
-export ASDD_JOB_STUB_OUTPUT="canned response for testing"
-asdd dispatch hello-world $ASDD_HOME/projects/hello-world/inbox/audit.md
-# audit.result.md contains "canned response for testing"
+asdd list
+# ID                       STATE        NAME
+# hello-world              active       Hello World
+
+ls $ASDD_HOME/projects/hello-world
+# .git  .specify  README  _state  inbox  jobs  results  schedule  specs
 ```
 
-Useful for verifying the dispatch pipeline end-to-end without spending tokens.
+> **First-time build note**: the next step (`asdd serve`, `asdd open`, or `asdd
+> dispatch`) triggers a one-time `docker build` of `asdd/project:latest`, which
+> takes ~30–60 seconds. The CLI streams the build output so it isn't silent.
 
 ---
 
-## 8c. Keep a session always-on (workflow 3: persistent / remote-control)
+## 6. Start a persistent, always-on session (`serve`)
 
 A persistent session is ONE long-lived Claude conversation that stays running
 on the Mac: it survives closing your terminal, auto-restarts if it crashes or
@@ -369,8 +322,119 @@ How it works under the hood:
 - While a session is up, `asdd dispatch <id>` runs the job **inside** the
   warm container — one container per project, reused.
 
-Stopping is authoritative: `asdd stop` disables the launchd agent first,
-then removes the container, so it does not come back until you `serve` again.
+Stopping is authoritative: `asdd stop` disables the launchd agent first, then
+removes the container, so it does not come back until you `serve` again.
+
+---
+
+## 7. Interactive Claude session inside the container (`open`)
+
+```bash
+asdd open hello-world
+```
+
+You land at a bash prompt **inside** the container, at `/asdd_home`. The prompt
+looks like:
+
+```
+asdd@<container-id>:/asdd_home$
+```
+
+What's mounted from your Mac:
+- the project workspace at `/asdd_home` (read/write)
+- your asdd subscription credentials (from `$ASDD_HOME/_state/claude-auth/`)
+  onto the container user's `~/.claude.json` and `~/.claude`, so Claude Code is
+  already logged in from your `asdd login` (§4)
+
+Everything else on the Mac is invisible — `ls /` won't show your home dir or
+other projects.
+
+Start an interactive Claude session:
+
+```
+asdd@…:/asdd_home$ claude
+> /speckit-specify add a /healthz endpoint
+```
+
+Spec-kit slash commands work out of the box because `.specify/integration.json`
+was wired in during `asdd new`.
+
+**To leave**, just `exit` the shell. The container stops automatically — no
+processes remain on the host (`docker ps` is empty).
+
+If you killed your terminal or lost the SSH connection, clean up manually:
+
+```bash
+asdd close hello-world
+```
+
+(`open` is for an ad-hoc, one-off shell. For a session you want to keep alive
+and drive from your phone, use `asdd serve` — §6.)
+
+---
+
+## 8. Define and run an autonomous job (`dispatch`)
+
+A "job" is **just a markdown file** whose body is piped to `claude --print`
+inside the container. No frontmatter is required.
+
+Constraints:
+1. The file must exist.
+2. The path must be **under** that project's workspace (i.e. somewhere inside
+   `$ASDD_HOME/projects/<id>/`), because that's the only path the container
+   can see.
+
+Convention is to drop job-notes into `inbox/`:
+
+```bash
+mkdir -p $ASDD_HOME/projects/hello-world/inbox
+
+cat > $ASDD_HOME/projects/hello-world/inbox/audit.md <<'EOF'
+# job: dependency audit
+
+Read package.json, list every dependency, and flag any that have
+not had a release in the last 24 months. Output a short markdown table.
+EOF
+```
+
+Run it now:
+
+```bash
+# Production: runs on your Claude subscription, using the login you
+# established with `asdd login` (§4). No API key needed.
+asdd dispatch hello-world \
+  $ASDD_HOME/projects/hello-world/inbox/audit.md
+```
+
+What happens:
+1. The project's container starts in **autonomous mode** (workspace mount
+   plus your asdd-owned subscription credential store).
+2. `asdd-run-job` reads the markdown file and pipes its body to
+   `claude --print`, authenticated on your subscription.
+3. Claude's stdout is written to
+   `$ASDD_HOME/projects/hello-world/results/audit.result.md`.
+4. The container stops. `docker ps` is empty again.
+
+The CLI prints the result path to stdout. If you have not logged in, the
+dispatch fails fast and tells you to run `asdd login`.
+
+### Bill a single run to an API key instead
+
+```bash
+ANTHROPIC_API_KEY=sk-ant-… asdd dispatch hello-world \
+  $ASDD_HOME/projects/hello-world/inbox/audit.md --api-key
+# This run uses metered billing; the subscription store is NOT mounted.
+```
+
+### Test path (no LLM calls / no API key / no login)
+
+```bash
+export ASDD_JOB_STUB_OUTPUT="canned response for testing"
+asdd dispatch hello-world $ASDD_HOME/projects/hello-world/inbox/audit.md
+# audit.result.md contains "canned response for testing"
+```
+
+Useful for verifying the dispatch pipeline end-to-end without spending tokens.
 
 ---
 
@@ -494,8 +558,11 @@ docker rmi asdd/project:latest
 pipx uninstall asdd
 # (or `pip uninstall asdd` if you used a venv)
 
-# Optionally remove the bundle source tree:
+# Optionally remove the cloned repo:
 rm -rf ~/asdd
+
+# And stop / remove the Docker engine if you no longer need it:
+colima stop        # or `colima delete` to remove the VM entirely
 ```
 
 ---
@@ -507,20 +574,46 @@ asdd init                                    initialise $ASDD_HOME
 asdd login [--fresh]                         establish Claude subscription auth
 asdd whoami                                  show auth status (no network call)
 asdd logout                                  clear stored subscription auth
-asdd new <id> --from-remote <url>            create project from existing repo
 asdd new <id>                                create empty project
+asdd new <id> --from-remote <url>            create project from existing repo
 asdd list                                    show projects
+asdd serve <id>                              start a persistent supervised session
+asdd attach <id>                             attach to a persistent session (detach leaves it up)
+asdd session status <id>                     show persistent-session status
+asdd stop <id>                               stop session + disable supervisor (durable)
 asdd open <id>                               interactive shell in container
 asdd close <id>                              force-stop container
 asdd ps                                      list running containers
 asdd dispatch <id> <job.md>                  run one job now (autonomous, subscription)
 asdd dispatch <id> <job.md> --api-key        run one job billed to ANTHROPIC_API_KEY
-asdd serve <id>                              start a persistent supervised session
-asdd attach <id>                             attach to a persistent session (detach leaves it up)
-asdd session status <id>                     show persistent-session status
-asdd stop <id>                               stop session + disable supervisor (durable)
 asdd secrets {add,remove,list} <id> [args]   manage per-project secrets
 
 echo '<cmd>' | at <time>                     fire <cmd> once at <time>
 atq        atrm <n>                          inspect / cancel scheduled jobs
 ```
+
+---
+
+## A note on automode (bypassing permission prompts)
+
+The whole reason Claude runs inside a per-project container is so you can let it
+work in **automode** — Claude Code's `--dangerously-skip-permissions` ("YOLO")
+mode, where it edits files and runs commands without stopping to ask for
+approval on each action. On a bare laptop that flag is genuinely dangerous; here
+it isn't, because the container can only see one project's workspace. A wrong
+command, a runaway script, or an over-eager refactor stays trapped inside the
+container — it can't reach your home directory, your other projects, or the
+host. The container is the blast radius, and `asdd` keeps it small. **That
+isolation is the point: the image exists precisely so automode is safe to run.**
+
+Today:
+
+- **Interactive (`asdd open`)** — start the session in automode yourself:
+  ```bash
+  asdd@…:/asdd_home$ claude --dangerously-skip-permissions
+  ```
+- **Autonomous (`asdd dispatch`)** and **persistent (`asdd serve`)** — the
+  in-container entrypoints (`asdd-run-job.sh`, `asdd-session.sh`) invoke `claude`
+  *without* that flag, by design: automode stays an explicit opt-in rather than
+  baked-in default behavior. If you want a hands-off dispatch or serve run, edit
+  those entrypoint scripts yourself to add `--dangerously-skip-permissions`.

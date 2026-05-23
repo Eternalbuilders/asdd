@@ -41,6 +41,16 @@ RUN ARCH="$(dpkg --print-architecture)" \
         "https://github.com/getsops/sops/releases/download/v${SOPS_VERSION}/sops-v${SOPS_VERSION}.linux.${ARCH}" \
     && chmod +x /usr/local/bin/sops
 
+# GitHub CLI (gh) — for repo operations from inside the container (pushing
+# branches, opening PRs). Pinned + arch-aware, same idiom as sops above.
+ARG GH_VERSION=2.92.0
+RUN ARCH="$(dpkg --print-architecture)" \
+    && curl -fsSL -o /tmp/gh.tar.gz \
+        "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_${ARCH}.tar.gz" \
+    && tar -xzf /tmp/gh.tar.gz -C /tmp \
+    && install -m 0755 "/tmp/gh_${GH_VERSION}_linux_${ARCH}/bin/gh" /usr/local/bin/gh \
+    && rm -rf /tmp/gh.tar.gz "/tmp/gh_${GH_VERSION}_linux_${ARCH}"
+
 # uv — astral.sh package manager. Required by `asdd new` to invoke
 # `uvx --from git+https://github.com/github/spec-kit.git specify init`
 # when scaffolding a new project (replaces the old template-copy approach

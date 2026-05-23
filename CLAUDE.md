@@ -27,11 +27,12 @@ This distinction is non-obvious and easy to get wrong:
 
 - **Dev (here)**: `/workspace/asdd-repo/` inside this Linux devcontainer.
   All editing, testing, and `/speckit-*` slash commands happen here.
-- **Deploy**: `make bundle` produces `asdd-bundle.tar.gz` (~35 KB),
-  unpacked on a Mac at `~/asdd/` (or similar) and installed via
-  `pipx install --editable .`. The Mac runs `asdd` against `$ASDD_HOME`
-  projects. **The Mac doesn't run this dev workflow** — it's purely a
-  deploy target.
+- **Deploy**: a plain `git clone` of this repo on a Mac at `~/asdd/` (or
+  similar), installed via `pipx install --editable .`. The checkout *is*
+  the install (editable resolves Dockerfile/template paths from it); update
+  with `git pull`. The Mac runs `asdd` against `$ASDD_HOME` projects. **The
+  Mac doesn't run this dev workflow** — it's purely a deploy target. (There
+  is no tarball bundle — that mechanism was removed in favour of git clone.)
 
 Do not assume you can develop from the Mac side.
 
@@ -39,8 +40,7 @@ For ad-hoc CLI runs in-container without installing:
 ```bash
 PYTHONPATH=. python3.12 -m asdd.bootstrap --help
 ```
-Everything else (`make test`, `make lint`, `make bundle`, `make clean`)
-is just the Makefile.
+Everything else (`make test`, `make lint`, `make clean`) is just the Makefile.
 
 ## Specs and the vault symlink
 
@@ -53,8 +53,8 @@ vault, not in git. The symlink:
   all work as if the specs were inside the repo.
 - Dangles on the Mac side — fine, because runtime asdd never reads
   `specs/`. Schemas live in `asdd/contracts/`, project templates in
-  `project_skeleton/`.
-- Is **excluded** from `make bundle` deliberately.
+  `project_skeleton/`. The symlink is git-tracked, so it comes along in a
+  clone and simply dangles there; no install step needs to strip it.
 
 When you author or revise specs, edit through the symlink. Changes are
 immediately visible in Obsidian. There is no separate "spec checkout"
@@ -69,13 +69,12 @@ user direction is a regression.
 | --- | --- | --- |
 | Image tag is `asdd/project:latest` | `asdd/project_container.py:24` | Renamed from `controlvault/project:latest` at extraction. |
 | Container prefix is `asdd-project-` | same file:25 | Match image tag. |
-| Schemas at `asdd/contracts/`, not in `specs/` | `asdd/_schemas.py` | "No spec-named paths in the deployed bundle" — user requirement. |
+| Schemas at `asdd/contracts/`, not in `specs/` | `asdd/_schemas.py` | "No spec-named paths in the deployed install" — user requirement. |
 | Skeleton at `project_skeleton/`, not `controlvault-skeleton/` | `asdd/bootstrap.py:40` | Same reason. |
-| Bundle excludes `specs/` | `Makefile:bundle` | Symlink is dev-only; would dangle in any tarball. |
 | Three deps only: PyYAML, jsonschema, click | `pyproject.toml` | Slimming was deliberate — kept asdd lean. Adding deps needs justification. |
 | Tests pass before commit | `make test` | 106 unit tests; integration tests skip cleanly when docker isn't available. |
 | Subscription auth is the default for all modes | `asdd/auth.py`, `asdd/project_container.py:auth_mounts` | Spec 009: every mode mounts the asdd-owned store at `$ASDD_HOME/_state/claude-auth/`; `ANTHROPIC_API_KEY` is opt-in (`dispatch --api-key`), not the default. Supersedes spec 008 FR-009 for Claude creds. |
-| Credential store never leaves `$ASDD_HOME` | `.gitignore`, `asdd/auth.py` | Holds live OAuth tokens; excluded from project workspaces, archives, and `make bundle`; `0700/0600`. |
+| Credential store never leaves `$ASDD_HOME` | `.gitignore`, `asdd/auth.py` | Holds live OAuth tokens; git-ignored and excluded from project workspaces and archives; `0700/0600`. |
 | Persistent-session supervisor is host-side launchd only; no inbound port | `asdd/supervisor.py` | Spec 010: container kept alive by Docker `--restart unless-stopped` + a launchd agent (`RunAtLoad`); nothing in-container calls launchd; "remote-control" is local attach, never an inbound listener. |
 
 ## Working with the user
