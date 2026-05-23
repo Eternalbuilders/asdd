@@ -2,7 +2,7 @@
 This project is built using https://github.com/github/spec-kit and agentic specification driven development. In other words I guided Claude to make this.
 
 # Purpose and introduction
-The purpose of this project is to create a container in which you can use Claude somewhat isolated from the rest of your computer with the intent of being able to run claude in auto-mode. 
+The purpose of this project is to create a container in which you can use Claude somewhat isolated from the rest of your computer with the intent of being able to run claude in auto-mode, reach Claude from your phone and be able to schedule tasks for later run. 
 
 See [USER_GUIDE.md](USER_GUIDE.md) for installation instructions. 
 
