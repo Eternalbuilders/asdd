@@ -1,5 +1,12 @@
-# ASDD — Agentic Spec-Driven Development
+# Disclaimer
+This project is built using https://github.com/github/spec-kit and agentic specification driven development. In other words I guided Claude to make this.
 
+# Purpose and introduction
+The purpose of this project is to create a container in which you can use Claude somewhat isolated from the rest of your computer with the intent of being able to run claude in auto-mode. 
+
+See [USER_GUIDE.md](USER_GUIDE.md) for installation instructions. 
+
+# ASDD — Agentic Spec-Driven Development
 A CLI and per-project container manager for running Claude Code safely. Each
 project gets an isolated Linux container with git, Claude Code, `uv`, and the
 spec-kit slash commands preinstalled — open a project's environment with one
@@ -21,6 +28,10 @@ Three modes:
   it survives detach, auto-restarts on crash/reboot, resumes its conversation,
   and is reachable from the Claude mobile app / claude.ai. `asdd attach` /
   `asdd stop` connect and shut it down. No inbound network port is opened.
+
+Proposed usage:
+- Start the Persistent mode, then open interactive mode. This means you connect
+  to the same claude session from your computer and your mobile. 
 
 ## Install and usage
 
