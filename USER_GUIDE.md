@@ -169,12 +169,16 @@ You should see the `asdd` subcommands: `init`, `new`, `list`, `open`, `close`,
 
 ### Pick where projects live
 
-Set `ASDD_HOME` to the directory where projects, registry, and templates will
-land. Default is `~/Code/asdd`. Keep it **under your home directory** (see the
-Colima caveat in §2.2).
+`ASDD_HOME` is the directory where projects, registry, templates, and the
+credential store live. **If you don't set it, asdd uses `~/Code/asdd`** — every
+`asdd` command falls back to that path, so a shell where the variable is unset
+silently operates against `~/Code/asdd`. Set it explicitly to avoid surprises,
+and keep it **under your home directory** (see the Colima caveat in §2.2).
 
 ```bash
-# In ~/.zshrc (persisted across shells)
+# In ~/.zshrc (persisted across shells). Skip this only if you're happy
+# with the ~/Code/asdd default — but then set it nowhere, or every shell
+# will disagree about where your projects are.
 export ASDD_HOME=$HOME/asdd-home
 ```
 
