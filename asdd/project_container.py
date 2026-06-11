@@ -76,6 +76,12 @@ class AlreadyRunningError(ProjectContainerError):
                 f"attach with `docker exec -it {container_name(project_id)} bash` "
                 f"or run `asdd close {project_id}` first"
             )
+        elif mode == "persistent":
+            msg = (
+                f"project {project_id!r} has a persistent session running; "
+                f"use `asdd attach {project_id}` to join it, "
+                f"or `asdd claude {project_id}` to enter Claude inside it"
+            )
         else:
             msg = f"project {project_id!r} has a container already running"
         super().__init__(msg)
@@ -267,12 +273,16 @@ def start_container(
         for name, value in extra_env.items():
             cmd += ["-e", f"{name}={value}"]
 
+    # Feature 001: ASDD_PROJECT_ID is plumbed into every mode so the
+    # in-container shell prompt can include it (see
+    # docker/files/asdd-prompt.sh). Previously only the persistent-session
+    # branch set it; interactive shells lacked the project label.
+    cmd += ["-e", f"{_PROJECT_ID_ENV}={pc.project_id}"]
+
     if pc.mode == "persistent":
         # The session container's main process runs the tmux-held
-        # `claude --remote-control` (spec 010); name it after the project and
-        # propagate the session stub so integration tests can hold it up
-        # without a live LLM.
-        cmd += ["-e", f"{_PROJECT_ID_ENV}={pc.project_id}"]
+        # `claude --remote-control` (spec 010); propagate the session stub so
+        # integration tests can hold it up without a live LLM.
         session_stub = _os.environ.get(_SESSION_STUB_ENV)
         if session_stub is not None:
             cmd += ["-e", f"{_SESSION_STUB_ENV}={session_stub}"]
@@ -347,6 +357,19 @@ def attach_shell(project_id: str) -> int:
     """
     result = subprocess.run(
         ["docker", "exec", "-it", container_name(project_id), "bash"],
+        check=False,
+    )
+    return result.returncode
+
+
+def attach_claude(project_id: str) -> int:
+    """Drop the operator into a Claude Code session inside the container.
+
+    Feature 001 US2 — symmetric to ``attach_shell``. Does NOT capture output
+    (interactive TTY only). Returns Claude's exit code.
+    """
+    result = subprocess.run(
+        ["docker", "exec", "-it", container_name(project_id), "claude"],
         check=False,
     )
     return result.returncode
@@ -568,6 +591,7 @@ __all__ = [
     "ProjectContainer",
     "ProjectContainerError",
     "assert_not_running",
+    "attach_claude",
     "attach_session",
     "attach_shell",
     "auth_mounts",

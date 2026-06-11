@@ -5,12 +5,13 @@
 # Intended future contract:
 #   - `asdd new <id>` copies this file into the new project's workspace as
 #     `<workspace>/Dockerfile.project.extras`.
-#   - `asdd open <id>` detects that the file is non-empty (has at least one
-#     non-comment, non-blank line) and, if so, builds a per-project image
-#     `controlvault/project-<id>:latest` layered on the shared base, using
-#     this file as the appended fragment.
-#   - If the file is empty (just this header), `asdd open` uses the shared
-#     base `controlvault/project:latest` directly with no per-project build.
+#   - Any entry-point that triggers an image build (`asdd open`, `asdd claude`,
+#     `asdd dispatch`, `asdd serve`) detects that the file is non-empty (has at
+#     least one non-comment, non-blank line) and, if so, builds a per-project
+#     image `asdd/project-<id>:latest` layered on the shared base, using this
+#     file as the appended fragment.
+#   - If the file is empty (just this header), those commands use the shared
+#     base `asdd/project:latest` directly with no per-project build.
 #
 # Until that machinery lands, editing this file has no effect.
 #

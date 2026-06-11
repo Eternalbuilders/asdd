@@ -72,13 +72,34 @@ def test_dispatch_reuses_persistent_container(
     assert result == ws / "results" / "job.result.md"
 
 
-def test_open_attaches_when_persistent(
+def test_open_refuses_when_persistent(
     asdd_home_with_project: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """Feature 001 US1: asdd open is a shell, never Claude. With a persistent
+    session running we must refuse and tell the operator to use
+    `asdd attach` or `asdd claude` instead of silently landing in Claude."""
+    monkeypatch.setattr(pc, "is_persistent_running", lambda pid: True)
+    monkeypatch.setattr(pc, "start_container", lambda *a, **k: pytest.fail("should not start"))
+    monkeypatch.setattr(pc, "attach_session", lambda pid: pytest.fail("should not attach"))
+    with pytest.raises(pc.AlreadyRunningError) as ei:
+        bootstrap.cmd_open(asdd_home=asdd_home_with_project, project_id="vaultcontrol")
+    assert ei.value.mode == "persistent"
+    assert "asdd attach" in str(ei.value)
+    assert "asdd claude" in str(ei.value)
+
+
+def test_claude_attaches_when_persistent(
+    asdd_home_with_project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Feature 001 US2 / FR-006: asdd claude re-attaches to a running
+    persistent session via tmux, rather than starting a second Claude."""
     monkeypatch.setattr(pc, "is_persistent_running", lambda pid: True)
     monkeypatch.setattr(pc, "start_container", lambda *a, **k: pytest.fail("should attach"))
     monkeypatch.setattr(pc, "attach_session", lambda pid: 0)
-    assert bootstrap.cmd_open(asdd_home=asdd_home_with_project, project_id="vaultcontrol") == 0
+    assert (
+        bootstrap.cmd_claude(asdd_home=asdd_home_with_project, project_id="vaultcontrol")
+        == 0
+    )
 
 
 def test_supervise_restarts_and_counts_when_down(
