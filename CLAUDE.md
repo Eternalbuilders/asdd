@@ -119,3 +119,8 @@ The full extraction story and outstanding follow-ups live in
 - `README.md` — user-facing install + workflow summary
 - `USER_GUIDE.md` — full operator path (projects, dispatch, scheduling)
 - `TRANSFER.md` — extraction story, what got renamed, open follow-ups
+
+<!-- SPECKIT START -->
+For additional context about technologies to be used, project structure,
+shell commands, and other important information, read the current plan
+<!-- SPECKIT END -->
