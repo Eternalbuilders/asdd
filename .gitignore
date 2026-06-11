@@ -24,3 +24,6 @@ _state/claude-auth/
 # Editor noise
 .idea/
 .vscode/
+
+# Claude Code agent folder — may contain credentials or local settings
+.claude/
