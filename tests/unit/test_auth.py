@@ -125,6 +125,48 @@ def test_store_permissions(fake_host: Path, tmp_path: Path) -> None:
     assert jmode == 0o600
 
 
+# --- Docker mount-target healing -------------------------------------------
+
+
+def test_seed_from_host_heals_dir_shaped_claude_json(fake_host: Path, tmp_path: Path) -> None:
+    """A container that mounted the store before login left ``claude.json`` as a
+    Docker-created directory; seed must heal it instead of raising
+    IsADirectoryError (the bug this fix addresses)."""
+    home = tmp_path / "asdd-home"
+    # Reproduce the Docker footprint: empty directories at both mount targets.
+    auth.store_json_path(home).mkdir(parents=True)
+    auth.store_claude_dir(home).mkdir(parents=True)
+
+    auth.seed_from_host(home)  # must not raise
+
+    assert auth.store_json_path(home).is_file()
+    assert auth.is_logged_in(home) is True
+
+
+def test_ensure_mountable_materialises_correct_types(tmp_path: Path) -> None:
+    """Before any login, ensure_mountable leaves a file + dir so Docker never
+    auto-creates a directory at the claude.json target."""
+    home = tmp_path / "asdd-home"
+    auth.ensure_mountable(home)
+    assert auth.store_json_path(home).is_file()
+    assert auth.store_claude_dir(home).is_dir()
+    assert stat.S_IMODE(auth.store_json_path(home).stat().st_mode) == 0o600
+    assert stat.S_IMODE(auth.store_claude_dir(home).stat().st_mode) == 0o700
+
+
+def test_ensure_mountable_heals_dir_and_is_non_destructive(tmp_path: Path) -> None:
+    home = tmp_path / "asdd-home"
+    # A stray Docker-created directory is healed back into a placeholder file.
+    auth.store_json_path(home).mkdir(parents=True)
+    auth.ensure_mountable(home)
+    assert auth.store_json_path(home).is_file()
+
+    # A real seeded credential must survive a later ensure_mountable call.
+    auth.store_json_path(home).write_text(json.dumps({"oauthAccount": {"x": 1}}))
+    auth.ensure_mountable(home)
+    assert json.loads(auth.store_json_path(home).read_text()) == {"oauthAccount": {"x": 1}}
+
+
 # --- clear -----------------------------------------------------------------
 
 

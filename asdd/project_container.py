@@ -95,6 +95,11 @@ def auth_mounts(asdd_home: Path) -> list[tuple[str, str, str]]:
     to the one shared store (FR-002/FR-004/FR-005/FR-015). Used by every
     mode; replaces spec 008's interactive-only host ``~/.claude`` mount.
     """
+    # Materialise the store as correctly-typed files before handing Docker the
+    # mount targets: a missing target is auto-created by Docker as a directory,
+    # which corrupts claude.json and breaks the next login. ensure_mountable is
+    # idempotent and non-destructive on an already-seeded store.
+    auth.ensure_mountable(asdd_home)
     return [
         (
             str(auth.store_json_path(asdd_home)),
