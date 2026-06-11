@@ -224,3 +224,63 @@ def test_is_persistent_running(monkeypatch: pytest.MonkeyPatch) -> None:
     assert pc.is_persistent_running("hello") is True
     monkeypatch.setattr(pc, "running_mode", lambda pid: "interactive")
     assert pc.is_persistent_running("hello") is False
+
+
+# --- feature 001: ASDD_PROJECT_ID plumbing + attach_claude ----------------
+
+
+def test_start_container_plumbs_asdd_project_id_for_all_modes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Feature 001 FR-007/FR-008: ASDD_PROJECT_ID must reach the container
+    in every mode so /etc/profile.d/asdd-prompt.sh can pick it up."""
+    for mode in ("interactive", "autonomous", "persistent"):
+        calls = _fake_run_capture(monkeypatch)
+        obj = pc.ProjectContainer(
+            project_id="my-app",
+            mode=mode,
+            workspace_path=tmp_path / "ws",
+            asdd_home=tmp_path / "home",
+        )
+        pc.start_container(obj)
+        assert "ASDD_PROJECT_ID=my-app" in _eflags(calls[0]), (
+            f"ASDD_PROJECT_ID missing for mode={mode!r}"
+        )
+
+
+def test_attach_shell_argv(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Regression for feature 001 US1: asdd open uses a shell, not claude."""
+    calls: list[list[str]] = []
+
+    def fake_run(args, *a, **kw):  # noqa: ANN001, ANN002, ANN003
+        calls.append(list(args))
+        return subprocess.CompletedProcess(args, 0)
+
+    monkeypatch.setattr(pc.subprocess, "run", fake_run)
+    pc.attach_shell("hello")
+    assert calls[0] == [
+        "docker",
+        "exec",
+        "-it",
+        pc.container_name("hello"),
+        "bash",
+    ]
+
+
+def test_attach_claude_argv(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Feature 001 US2: attach_claude execs `claude` in the project container."""
+    calls: list[list[str]] = []
+
+    def fake_run(args, *a, **kw):  # noqa: ANN001, ANN002, ANN003
+        calls.append(list(args))
+        return subprocess.CompletedProcess(args, 0)
+
+    monkeypatch.setattr(pc.subprocess, "run", fake_run)
+    pc.attach_claude("hello")
+    assert calls[0] == [
+        "docker",
+        "exec",
+        "-it",
+        pc.container_name("hello"),
+        "claude",
+    ]

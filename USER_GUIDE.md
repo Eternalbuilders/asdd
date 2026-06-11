@@ -314,9 +314,11 @@ How it works under the hood:
 - The container's main process is a `tmux` session running one interactive
   `claude --remote-control`. tmux keeps that single session alive with no
   client attached, so it stays mobile-visible AND is locally re-attachable.
-  `asdd attach` / `asdd open` run `tmux attach`, dropping you into the *same*
+  `asdd attach` / `asdd claude` run `tmux attach`, dropping you into the *same*
   conversation (mobile and your terminal share it — they stay in sync, but
-  don't type in both at once).
+  don't type in both at once). `asdd open` against a project with a running
+  persistent session refuses with a clear message rather than silently
+  re-attaching — use `asdd attach` for that path.
 - A per-project launchd agent (`~/Library/LaunchAgents/com.asdd.session.<id>.plist`)
   runs `asdd serve <id> --supervise` as a foreground babysitter. When the
   container exits (crash, OOM, daemon restart), the babysitter exits too and
@@ -331,7 +333,15 @@ removes the container, so it does not come back until you `serve` again.
 
 ---
 
-## 7. Interactive Claude session inside the container (`open`)
+## 7. Interactive shell and Claude session inside the container (`open`, `claude`)
+
+There are two interactive entry points:
+
+- **`asdd open <id>`** — drops you at a bash shell inside the container. No
+  Claude is started; use this for `git`, `gh`, `asdd`, file inspection, or
+  anything else you'd do at a normal shell.
+- **`asdd claude <id>`** — starts a Claude Code session directly inside the
+  container. Use this when you want to talk to Claude immediately.
 
 ```bash
 asdd open hello-world
@@ -341,8 +351,11 @@ You land at a bash prompt **inside** the container, at `/asdd_home`. The prompt
 looks like:
 
 ```
-asdd@<container-id>:/asdd_home$
+(hello-world) asdd@<container-id>:/asdd_home$
 ```
+
+The `(hello-world)` prefix tells you which project's container this shell is
+inside — handy when you have shells open on more than one project.
 
 What's mounted from your Mac:
 - the project workspace at `/asdd_home` (read/write)
@@ -353,18 +366,26 @@ What's mounted from your Mac:
 Everything else on the Mac is invisible — `ls /` won't show your home dir or
 other projects.
 
-Start an interactive Claude session:
+Start an interactive Claude session — either from the shell you just landed
+in, or directly via `asdd claude`:
 
 ```
-asdd@…:/asdd_home$ claude
+(hello-world) asdd@…:/asdd_home$ claude
+> /speckit-specify add a /healthz endpoint
+```
+
+Or one command from the host:
+
+```bash
+asdd claude hello-world
 > /speckit-specify add a /healthz endpoint
 ```
 
 Spec-kit slash commands work out of the box because `.specify/integration.json`
 was wired in during `asdd new`.
 
-**To leave**, just `exit` the shell. The container stops automatically — no
-processes remain on the host (`docker ps` is empty).
+**To leave**, just `exit` the shell (or exit Claude). The container stops
+automatically — no processes remain on the host (`docker ps` is empty).
 
 If you killed your terminal or lost the SSH connection, clean up manually:
 
@@ -372,8 +393,9 @@ If you killed your terminal or lost the SSH connection, clean up manually:
 asdd close hello-world
 ```
 
-(`open` is for an ad-hoc, one-off shell. For a session you want to keep alive
-and drive from your phone, use `asdd serve` — §6.)
+(`open` is for an ad-hoc, one-off shell and `claude` is for a one-off Claude
+session. For a session you want to keep alive and drive from your phone, use
+`asdd serve` — §6.)
 
 ---
 
@@ -585,7 +607,8 @@ asdd serve <id>                              start a persistent supervised sessi
 asdd attach <id>                             attach to a persistent session (detach leaves it up)
 asdd session status <id>                     show persistent-session status
 asdd stop <id>                               stop session + disable supervisor (durable)
-asdd open <id>                               interactive shell in container
+asdd open <id>                               interactive bash shell in container (no Claude)
+asdd claude <id>                             interactive Claude session in container
 asdd close <id>                              force-stop container
 asdd ps                                      list running containers
 asdd dispatch <id> <job.md>                  run one job now (autonomous, subscription)
@@ -612,10 +635,13 @@ isolation is the point: the image exists precisely so automode is safe to run.**
 
 Today:
 
-- **Interactive (`asdd open`)** — start the session in automode yourself:
+- **Interactive (`asdd open` / `asdd claude`)** — start the session in automode
+  yourself. From a shell opened via `asdd open`:
   ```bash
-  asdd@…:/asdd_home$ claude --dangerously-skip-permissions
+  (hello-world) asdd@…:/asdd_home$ claude --dangerously-skip-permissions
   ```
+  `asdd claude` itself does not pass the flag — if you want automode every
+  time, launch via `asdd open` and add the flag at the shell prompt.
 - **Autonomous (`asdd dispatch`)** and **persistent (`asdd serve`)** — the
   in-container entrypoints (`asdd-run-job.sh`, `asdd-session.sh`) invoke `claude`
   *without* that flag, by design: automode stays an explicit opt-in rather than

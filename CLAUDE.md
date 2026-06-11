@@ -13,10 +13,12 @@ to `TRANSFER.md` for the extraction story and outstanding follow-ups.
 ## What this repo is
 
 The asdd CLI and its per-project container manager. See `README.md` for
-the user-facing summary. The three operating modes — `asdd open`
-(interactive shells), `asdd dispatch` (autonomous markdown job runs), and
-`asdd serve` (a persistent, launchd-supervised, auto-restarting session) —
-are documented in `USER_GUIDE.md`.
+the user-facing summary. The operating modes — `asdd open` (interactive
+bash shell, no Claude), `asdd claude` (interactive Claude session),
+`asdd dispatch` (autonomous markdown job runs), and `asdd serve` (a
+persistent, launchd-supervised, auto-restarting session) — are documented
+in `USER_GUIDE.md`. Feature 001 (see `specs/001-container-shell-and-gh/`)
+split `asdd open` from the dedicated `asdd claude` entry point.
 
 Code layout is conventional Python: package at `asdd/`, Dockerfiles at
 `docker/`, scaffold at `project_skeleton/`, tests at `tests/`.
@@ -123,4 +125,5 @@ The full extraction story and outstanding follow-ups live in
 <!-- SPECKIT START -->
 For additional context about technologies to be used, project structure,
 shell commands, and other important information, read the current plan
+at `specs/001-container-shell-and-gh/plan.md`.
 <!-- SPECKIT END -->

@@ -17,10 +17,14 @@ Authentication is your **Claude subscription**, established once with
 `asdd login` and reused by every mode (no API key required). Credentials live
 in an asdd-owned store under `$ASDD_HOME/_state/claude-auth/`.
 
-Three modes:
-- **Interactive** — `asdd open <id>` drops you into a bash shell inside the
-  project's container with your subscription auth mounted in. Type `claude`,
-  use `/speckit-*` slash commands.
+Three modes, two interactive entry points:
+- **Interactive shell** — `asdd open <id>` drops you into a bash shell inside
+  the project's container (no Claude). The prompt shows `(<id>)` so you can
+  tell which container you're in. Use it for `git`, `gh`, `asdd`, file
+  inspection, and anything else you'd do at a normal shell.
+- **Interactive Claude** — `asdd claude <id>` starts a Claude Code session
+  inside the project's container with your subscription auth mounted in.
+  Use `/speckit-*` slash commands inside it.
 - **Autonomous** — `asdd dispatch <id> <job.md>` runs one markdown "job-note"
   through `claude --print` inside the container, writes the result, and stops.
   Pass `--api-key` to bill a specific run to `ANTHROPIC_API_KEY` instead.
@@ -30,8 +34,9 @@ Three modes:
   `asdd stop` connect and shut it down. No inbound network port is opened.
 
 Proposed usage:
-- Start the Persistent mode, then open interactive mode. This means you connect
-  to the same claude session from your computer and your mobile. 
+- Start the Persistent mode, then `asdd claude` (or `asdd attach`) to talk to
+  it locally. This means you connect to the same claude session from your
+  computer and your mobile.
 
 ## Install and usage
 

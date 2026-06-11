@@ -403,16 +403,56 @@ def _decrypt_project_secrets(row: dict[str, Any]) -> dict[str, str]:
 
 
 def cmd_open(*, asdd_home: Path, project_id: str) -> int:
-    """Open a project's container interactively (spec 008 FR-001).
+    """Open a project's container at an interactive bash shell (no Claude).
 
-    Returns the bash exit code from inside the container.
-    Always stops the container on exit (FR-004); a stale container can
-    be cleaned up by `asdd close`.
+    Spec 008 FR-001 + feature 001 US1. Returns bash's exit code from inside
+    the container. Always stops the container on exit (FR-004); a stale
+    container can be cleaned up by `asdd close`.
+
+    Refuses with `AlreadyRunningError` when a persistent session is running
+    for this project. Use `asdd attach` to join the session or `asdd claude`
+    to start a Claude session inside it.
     """
     row = _registry_lookup(asdd_home, project_id)
 
-    # FR-013: if a persistent session is already running, attach to it rather
-    # than starting a second container.
+    # Feature 001 US1: `asdd open` is a shell, never Claude. If a persistent
+    # session is running it is holding Claude inside tmux; refuse with a
+    # message that names the right command instead of silently landing the
+    # operator in Claude.
+    if project_container.is_persistent_running(project_id):
+        raise project_container.AlreadyRunningError(project_id, mode="persistent")
+
+    _require_login(asdd_home, interactive=True)
+
+    project_container.ensure_image_built()
+    project_container.assert_not_running(project_id)
+
+    project_secrets = _decrypt_project_secrets(row)
+
+    pc_obj = project_container.ProjectContainer(
+        project_id=project_id,
+        mode="interactive",
+        workspace_path=Path(row["workspace_path"]),
+        asdd_home=asdd_home,
+    )
+    project_container.start_container(pc_obj, extra_env=project_secrets)
+    try:
+        return project_container.attach_shell(project_id)
+    finally:
+        project_container.stop_container(project_id)
+
+
+def cmd_claude(*, asdd_home: Path, project_id: str) -> int:
+    """Start an interactive Claude session in a project's container (feature 001 US2).
+
+    Mirrors ``cmd_open`` except that the final attach runs ``claude`` instead
+    of ``bash``. Re-attaches to a running persistent session if one exists
+    (preserving today's spec 010 behaviour). Returns Claude's exit code.
+    """
+    row = _registry_lookup(asdd_home, project_id)
+
+    # Feature 001 FR-006: a persistent session is already holding Claude in
+    # tmux. Re-attach to it rather than start a second Claude.
     if project_container.is_persistent_running(project_id):
         return project_container.attach_session(project_id)
 
@@ -431,7 +471,7 @@ def cmd_open(*, asdd_home: Path, project_id: str) -> int:
     )
     project_container.start_container(pc_obj, extra_env=project_secrets)
     try:
-        return project_container.attach_shell(project_id)
+        return project_container.attach_claude(project_id)
     finally:
         project_container.stop_container(project_id)
 
@@ -942,12 +982,35 @@ def _cli_archive(project_id: str) -> None:
     click.echo(f"Project {project_id!r} archived")
 
 
-@cli.command("open", help="Open a project's container (interactive bash inside).")
+@cli.command(
+    "open", help="Open a project's container at an interactive bash shell (no Claude)."
+)
 @click.argument("project_id")
 def _cli_open(project_id: str) -> None:
     home = _asdd_home_from_env()
     try:
         rc = cmd_open(asdd_home=home, project_id=project_id)
+    except BootstrapError as e:
+        click.echo(f"error: {e}", err=True)
+        sys.exit(1)
+    except project_container.AlreadyRunningError as e:
+        click.echo(f"error: {e}", err=True)
+        sys.exit(1)
+    except project_container.ProjectContainerError as e:
+        click.echo(f"error: {e}", err=True)
+        sys.exit(1)
+    sys.exit(rc)
+
+
+@cli.command(
+    "claude",
+    help="Start an interactive Claude Code session in a project's container.",
+)
+@click.argument("project_id")
+def _cli_claude(project_id: str) -> None:
+    home = _asdd_home_from_env()
+    try:
+        rc = cmd_claude(asdd_home=home, project_id=project_id)
     except BootstrapError as e:
         click.echo(f"error: {e}", err=True)
         sys.exit(1)
