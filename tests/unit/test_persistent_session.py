@@ -72,20 +72,31 @@ def test_dispatch_reuses_persistent_container(
     assert result == ws / "results" / "job.result.md"
 
 
-def test_open_refuses_when_persistent(
+def test_open_side_execs_shell_when_persistent(
     asdd_home_with_project: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Feature 001 US1: asdd open is a shell, never Claude. With a persistent
-    session running we must refuse and tell the operator to use
-    `asdd attach` or `asdd claude` instead of silently landing in Claude."""
+    """Feature 001 US1: ``asdd open`` is a shell, never Claude. When a
+    persistent session is already running, the container exists and Claude
+    is held inside tmux. We must side-exec a bash shell into the same
+    container — the operator gets the shell they asked for, the persistent
+    session keeps running. We must NOT start a new container, NOT attach to
+    the tmux session (that would land in Claude), and NOT stop the container
+    on exit (that would kill the persistent session)."""
     monkeypatch.setattr(pc, "is_persistent_running", lambda pid: True)
     monkeypatch.setattr(pc, "start_container", lambda *a, **k: pytest.fail("should not start"))
-    monkeypatch.setattr(pc, "attach_session", lambda pid: pytest.fail("should not attach"))
-    with pytest.raises(pc.AlreadyRunningError) as ei:
-        bootstrap.cmd_open(asdd_home=asdd_home_with_project, project_id="vaultcontrol")
-    assert ei.value.mode == "persistent"
-    assert "asdd attach" in str(ei.value)
-    assert "asdd claude" in str(ei.value)
+    monkeypatch.setattr(pc, "attach_session", lambda pid: pytest.fail("should not attach to tmux"))
+    monkeypatch.setattr(pc, "stop_container", lambda pid: pytest.fail("must not stop persistent container"))
+
+    attach_calls: list[str] = []
+
+    def fake_attach_shell(pid: str) -> int:
+        attach_calls.append(pid)
+        return 0
+
+    monkeypatch.setattr(pc, "attach_shell", fake_attach_shell)
+    rc = bootstrap.cmd_open(asdd_home=asdd_home_with_project, project_id="vaultcontrol")
+    assert rc == 0
+    assert attach_calls == ["vaultcontrol"]
 
 
 def test_claude_attaches_when_persistent(

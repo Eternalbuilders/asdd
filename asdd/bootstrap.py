@@ -409,18 +409,21 @@ def cmd_open(*, asdd_home: Path, project_id: str) -> int:
     the container. Always stops the container on exit (FR-004); a stale
     container can be cleaned up by `asdd close`.
 
-    Refuses with `AlreadyRunningError` when a persistent session is running
-    for this project. Use `asdd attach` to join the session or `asdd claude`
-    to start a Claude session inside it.
+    If a persistent session is running for this project, side-execs a bash
+    shell into the existing container — the persistent Claude session keeps
+    running in its tmux undisturbed, the operator gets the shell they asked
+    for. Exiting the side-shell does NOT stop the container (that would kill
+    the persistent session).
     """
     row = _registry_lookup(asdd_home, project_id)
 
-    # Feature 001 US1: `asdd open` is a shell, never Claude. If a persistent
-    # session is running it is holding Claude inside tmux; refuse with a
-    # message that names the right command instead of silently landing the
-    # operator in Claude.
+    # Feature 001 US1: `asdd open` is a shell, never Claude. When a
+    # persistent session is running, the container already exists with
+    # Claude held in tmux. Side-exec bash into the same container so the
+    # operator gets their shell without disturbing the persistent session.
+    # Exiting the shell returns directly — we must NOT stop the container.
     if project_container.is_persistent_running(project_id):
-        raise project_container.AlreadyRunningError(project_id, mode="persistent")
+        return project_container.attach_shell(project_id)
 
     _require_login(asdd_home, interactive=True)
 
