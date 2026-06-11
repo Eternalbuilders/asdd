@@ -61,10 +61,14 @@ def test_dispatch_writes_result_and_stops_container(
     monkeypatch.setenv("ANTHROPIC_API_KEY", "stub-key-not-used")
 
     pc.ensure_image_built()
+    # This test exercises the API-key auth path (spec 009 FR-007 opt-in); the
+    # subscription store is intentionally not seeded here, so dispatch must be
+    # told to bill the run to ANTHROPIC_API_KEY rather than the default store.
     result_path = bootstrap.cmd_dispatch(
         asdd_home=asdd_home_with_project,
         project_id=project_id,
         job_path=job_path,
+        use_api_key=True,
     )
 
     assert result_path.is_file(), f"result file missing at {result_path}"

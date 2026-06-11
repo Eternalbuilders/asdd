@@ -139,6 +139,10 @@ def seed_from_host(asdd_home: Path) -> None:
     _ensure_store(asdd_home)
 
     dst_json = store_json_path(asdd_home)
+    # A container that mounted the store before it was seeded leaves this path
+    # as a Docker-created directory; remove it so the write below doesn't raise
+    # IsADirectoryError (see ensure_mountable).
+    _heal_json_is_dir(dst_json)
     dst_json.write_bytes(host_claude_json().read_bytes())
     os.chmod(dst_json, 0o600)
 
@@ -156,14 +160,47 @@ def seed_from_host(asdd_home: Path) -> None:
 def prepare_empty_store(asdd_home: Path) -> None:
     """Create empty store files so a container can bind-mount them for a
     fresh in-container login (the login writes credentials into the mount)."""
+    ensure_mountable(asdd_home)
+
+
+def ensure_mountable(asdd_home: Path) -> None:
+    """Guarantee the store is safe to bind-mount: ``claude.json`` is a regular
+    file and ``claude/`` is a directory, materialising an empty ``claude.json``
+    placeholder when the store has not been seeded yet.
+
+    Docker (and OrbStack) auto-create a *missing* bind-mount target as an empty
+    directory. If any container mounts the store before ``asdd login`` seeds it,
+    ``claude.json`` becomes a directory and the next seed crashes with
+    IsADirectoryError. Calling this immediately before every container mount
+    keeps the mount targets correctly typed and makes the whole flow
+    self-healing regardless of which runs first. Non-destructive: an
+    already-seeded store keeps its files, with only permissions re-asserted.
+    """
     _ensure_store(asdd_home)
+
     j = store_json_path(asdd_home)
+    _heal_json_is_dir(j)
     if not j.exists():
         j.write_text("{}\n")
         os.chmod(j, 0o600)
+
     d = store_claude_dir(asdd_home)
+    # The reverse mistype is unlikely, but keep the dir target a directory.
+    if d.exists() and not d.is_dir() and not d.is_symlink():
+        d.unlink()
     d.mkdir(parents=True, exist_ok=True)
     os.chmod(d, 0o700)
+
+
+def _heal_json_is_dir(path: Path) -> None:
+    """Remove ``path`` if a container left it as a Docker-created directory.
+
+    A bind mount of a not-yet-seeded ``claude.json`` creates an empty directory
+    at that path; the next file write would raise IsADirectoryError. Removing it
+    lets the caller write the real file. Symlinks are left untouched.
+    """
+    if path.is_dir() and not path.is_symlink():
+        _rmtree(path)
 
 
 def mark_fresh_login(asdd_home: Path) -> None:
@@ -333,6 +370,7 @@ __all__ = [
     "AuthStatus",
     "clear",
     "credentials_file",
+    "ensure_mountable",
     "ensure_workspace_trusted",
     "has_credential",
     "host_login_present",
