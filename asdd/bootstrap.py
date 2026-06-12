@@ -22,6 +22,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -30,6 +31,8 @@ import click
 import yaml
 
 from asdd import auth, lifecycle, project_container, secrets, supervisor, workspace
+from asdd import banner as banner_mod
+from asdd import tool_manifest, tools as tools_mod, version_check
 from asdd._schemas import validate_registry
 from asdd.registry import Project
 
@@ -423,6 +426,7 @@ def cmd_open(*, asdd_home: Path, project_id: str) -> int:
     # operator gets their shell without disturbing the persistent session.
     # Exiting the shell returns directly — we must NOT stop the container.
     if project_container.is_persistent_running(project_id):
+        print_banner(asdd_home, project_id)
         return project_container.attach_shell(project_id)
 
     _require_login(asdd_home, interactive=True)
@@ -440,6 +444,7 @@ def cmd_open(*, asdd_home: Path, project_id: str) -> int:
     )
     project_container.start_container(pc_obj, extra_env=project_secrets)
     try:
+        print_banner(asdd_home, project_id)
         return project_container.attach_shell(project_id)
     finally:
         project_container.stop_container(project_id)
@@ -457,6 +462,7 @@ def cmd_claude(*, asdd_home: Path, project_id: str) -> int:
     # Feature 001 FR-006: a persistent session is already holding Claude in
     # tmux. Re-attach to it rather than start a second Claude.
     if project_container.is_persistent_running(project_id):
+        print_banner(asdd_home, project_id)
         return project_container.attach_session(project_id)
 
     _require_login(asdd_home, interactive=True)
@@ -474,6 +480,7 @@ def cmd_claude(*, asdd_home: Path, project_id: str) -> int:
     )
     project_container.start_container(pc_obj, extra_env=project_secrets)
     try:
+        print_banner(asdd_home, project_id)
         return project_container.attach_claude(project_id)
     finally:
         project_container.stop_container(project_id)
@@ -1286,6 +1293,511 @@ def _cli_dispatch(project_id: str, job_path: Path, use_api_key: bool) -> None:
         click.echo(f"error: {e}", err=True)
         sys.exit(1)
     click.echo(f"result: {result_file}")
+
+
+# ---------------------------------------------------------------------------
+# Spec 002 CLI wiring
+# ---------------------------------------------------------------------------
+
+
+def _emit_result(result: dict[str, Any], *, as_json: bool) -> None:
+    if as_json:
+        click.echo(json.dumps(result, indent=2, sort_keys=True))
+        return
+    cmd = result.get("command")
+    if cmd == "upgrade":
+        if result.get("noop"):
+            click.echo(f"{result['tool']} in {result['project_id']}: already current ({result['to']})")
+        else:
+            tail = ""
+            if result.get("reload") and not result.get("reload_succeeded", True):
+                tail = " (reload failed; binary installed)"
+            click.echo(
+                f"upgraded {result['tool']} in {result['project_id']}: "
+                f"{result.get('from') or '(baseline)'} → {result['to']}{tail}"
+            )
+    elif cmd == "rollback":
+        click.echo(
+            f"rolled back {result['tool']} in {result['project_id']}: "
+            f"{result['from']} → {result['to']}"
+        )
+    elif cmd == "pin":
+        click.echo(f"pinned {result['tool']} = {result['version']} in {result['project_id']}")
+    elif cmd == "unpin":
+        if result.get("noop"):
+            click.echo(f"{result['tool']} in {result['project_id']}: no pin to remove")
+        else:
+            click.echo(f"unpinned {result['tool']} in {result['project_id']}")
+    elif cmd == "reset-tools":
+        cleared = result.get("cleared") or []
+        if not cleared:
+            click.echo(f"reset-tools in {result['project_id']}: no overlay state to clear")
+        else:
+            click.echo(
+                f"reset {', '.join(cleared)} in {result['project_id']}: "
+                "baseline takes over on next session"
+            )
+    elif cmd == "versions":
+        rows = result["tools"]
+        click.echo(f"PROJECT  {result['project_id']}")
+        click.echo("")
+        click.echo(f"{'TOOL':10} {'INSTALLED':12} {'LATEST':12} {'PIN':10} {'STATUS'}")
+        for row in rows:
+            click.echo(
+                f"{row['tool']:10} {row['installed']:12} {row['latest']:12} "
+                f"{(row['pin'] or ''):10} {row['status']}"
+            )
+
+
+@cli.command("upgrade", help="Upgrade a tool in a project's container (spec 002).")
+@click.argument("tool_name")
+@click.argument("project_id")
+@click.option(
+    "--reload",
+    is_flag=True,
+    default=False,
+    help="After install, bounce the running Claude so it picks up the new binary.",
+)
+@click.option("--json", "as_json", is_flag=True, default=False)
+def _cli_upgrade(tool_name: str, project_id: str, reload: bool, as_json: bool) -> None:
+    home = _asdd_home_from_env()
+    try:
+        result = cmd_upgrade(
+            asdd_home=home,
+            project_id=project_id,
+            tool_name=tool_name,
+            reload=reload,
+        )
+    except tool_manifest.LockBusyError as e:
+        click.echo(f"error: {e}", err=True)
+        sys.exit(2)
+    except PinViolationError as e:
+        click.echo(f"error: {e}", err=True)
+        sys.exit(3)
+    except tools_mod.DriverError as e:
+        click.echo(f"error: {e}", err=True)
+        sys.exit(4)
+    except BootstrapError as e:
+        click.echo(f"error: {e}", err=True)
+        sys.exit(1)
+    _emit_result(result, as_json=as_json)
+
+
+@cli.command("rollback", help="Revert a tool to its prior version (spec 002).")
+@click.argument("tool_name")
+@click.argument("project_id")
+@click.option("--json", "as_json", is_flag=True, default=False)
+def _cli_rollback(tool_name: str, project_id: str, as_json: bool) -> None:
+    home = _asdd_home_from_env()
+    try:
+        result = cmd_rollback(asdd_home=home, project_id=project_id, tool_name=tool_name)
+    except tool_manifest.LockBusyError as e:
+        click.echo(f"error: {e}", err=True)
+        sys.exit(2)
+    except BootstrapError as e:
+        click.echo(f"error: {e}", err=True)
+        sys.exit(6)
+    _emit_result(result, as_json=as_json)
+
+
+@cli.command("pin", help="Pin a tool at its currently-installed version (spec 002).")
+@click.argument("spec")
+@click.argument("project_id")
+@click.option("--json", "as_json", is_flag=True, default=False)
+def _cli_pin(spec: str, project_id: str, as_json: bool) -> None:
+    if "=" not in spec:
+        click.echo("error: usage: asdd pin <tool>=<version> <project_id>", err=True)
+        sys.exit(1)
+    tool_name, version = spec.split("=", 1)
+    home = _asdd_home_from_env()
+    try:
+        result = cmd_pin(
+            asdd_home=home, project_id=project_id, tool_name=tool_name, version=version
+        )
+    except tool_manifest.LockBusyError as e:
+        click.echo(f"error: {e}", err=True)
+        sys.exit(2)
+    except BootstrapError as e:
+        click.echo(f"error: {e}", err=True)
+        sys.exit(7)
+    _emit_result(result, as_json=as_json)
+
+
+@cli.command("unpin", help="Remove a tool's pin (spec 002).")
+@click.argument("tool_name")
+@click.argument("project_id")
+@click.option("--json", "as_json", is_flag=True, default=False)
+def _cli_unpin(tool_name: str, project_id: str, as_json: bool) -> None:
+    home = _asdd_home_from_env()
+    try:
+        result = cmd_unpin(asdd_home=home, project_id=project_id, tool_name=tool_name)
+    except BootstrapError as e:
+        click.echo(f"error: {e}", err=True)
+        sys.exit(1)
+    _emit_result(result, as_json=as_json)
+
+
+@cli.command(
+    "reset-tools",
+    help="Clear a project's tool overlay (the baseline takes over). spec 002.",
+)
+@click.argument("scope")
+@click.argument("project_id")
+@click.option("--json", "as_json", is_flag=True, default=False)
+def _cli_reset_tools(scope: str, project_id: str, as_json: bool) -> None:
+    tool_name: str | None = None if scope == "--all" else scope
+    home = _asdd_home_from_env()
+    try:
+        result = cmd_reset_tools(
+            asdd_home=home, project_id=project_id, tool_name=tool_name
+        )
+    except BootstrapError as e:
+        click.echo(f"error: {e}", err=True)
+        sys.exit(1)
+    _emit_result(result, as_json=as_json)
+
+
+@cli.command("versions", help="Show installed vs. latest tool versions (spec 002).")
+@click.argument("project_id")
+@click.option("--json", "as_json", is_flag=True, default=False)
+def _cli_versions(project_id: str, as_json: bool) -> None:
+    home = _asdd_home_from_env()
+    try:
+        result = cmd_versions(asdd_home=home, project_id=project_id)
+    except BootstrapError as e:
+        click.echo(f"error: {e}", err=True)
+        sys.exit(1)
+    _emit_result(result, as_json=as_json)
+
+
+# ---------------------------------------------------------------------------
+# Spec 002 — per-project tool upgrades
+# ---------------------------------------------------------------------------
+
+
+class PinViolationError(BootstrapError):
+    """An upgrade was requested for a pinned tool without override."""
+
+
+def _tool_or_raise(tool_name: str) -> tools_mod.ManagedTool:
+    if tool_name not in tools_mod.TOOLS:
+        known = ", ".join(sorted(tools_mod.TOOLS.keys()))
+        raise BootstrapError(f"unknown tool {tool_name!r}; known: {known}")
+    return tools_mod.TOOLS[tool_name]
+
+
+def cmd_upgrade(
+    *,
+    asdd_home: Path,
+    project_id: str,
+    tool_name: str,
+    reload: bool = False,
+) -> dict[str, Any]:
+    """Upgrade ``tool_name`` for ``project_id`` to its latest available version.
+
+    Returns a dict suitable for ``--json`` output. Raises ``BootstrapError`` /
+    ``PinViolationError`` / ``project_container.ProjectContainerError`` on
+    failures the CLI translates to exit codes.
+    """
+    _registry_lookup(asdd_home, project_id)
+    tool = _tool_or_raise(tool_name)
+
+    started = time.time()
+    with tool_manifest.acquire_lock(asdd_home, project_id, tool_name):
+        manifest = tool_manifest.load(asdd_home, project_id, tool_name)
+        latest = version_check.check_latest(asdd_home, tool, use_cache=False)
+        if latest is None:
+            tool_manifest.append_upgrade_log(
+                asdd_home, project_id, tool_name,
+                action="upgrade", from_version=manifest.current_version if manifest else None,
+                to_version=None, exit_code=4,
+                duration_ms=int((time.time() - started) * 1000),
+            )
+            raise BootstrapError(
+                f"could not determine latest version of {tool_name}; "
+                "registry unreachable"
+            )
+
+        current = manifest.current_version if manifest else None
+        if current == latest:
+            return {
+                "command": "upgrade",
+                "tool": tool_name,
+                "project_id": project_id,
+                "from": current,
+                "to": latest,
+                "reload": reload,
+                "noop": True,
+            }
+
+        if manifest and manifest.pin and manifest.pin.version != latest:
+            raise PinViolationError(
+                f"{tool_name} is pinned to {manifest.pin.version} in {project_id}; "
+                f"run `asdd unpin {tool_name} {project_id}` first"
+            )
+
+        # Per-tool root under the host overlay.
+        root = tool_manifest.tool_dir(asdd_home, project_id, tool_name)
+        root.mkdir(parents=True, exist_ok=True, mode=0o700)
+
+        # Drive the install through a container runner.
+        container_name = project_container.container_name(project_id)
+        driver = tools_mod.driver_for(tool)
+        if isinstance(driver, tools_mod.NpmGlobalDriver):
+            driver._runner = tools_mod._DockerExecRunner(container_name=container_name)
+
+        result = driver.install(tool, root, latest)
+        tools_mod.retarget_bin_symlink(
+            tool_manifest.project_tools_dir(asdd_home, project_id),
+            tool,
+            latest,
+        )
+
+        new_record = tool_manifest.VersionRecord(
+            version=result.version,
+            installed_at=int(time.time()),
+            install_method=tool.driver_method,
+            size_bytes=result.size_bytes,
+        )
+        if manifest is None:
+            manifest = tool_manifest.Manifest(
+                tool_name=tool_name,
+                current_version=result.version,
+                history=[new_record],
+            )
+        else:
+            evicted = tool_manifest.push_history(manifest, new_record)
+            if evicted is not None:
+                driver.uninstall(tool, root, evicted)
+        manifest.last_checked_at = int(time.time())
+        tool_manifest.save(asdd_home, project_id, manifest)
+
+        reload_ok = True
+        if reload:
+            reload_ok = project_container.bounce_persistent_claude(project_id)
+
+        tool_manifest.append_upgrade_log(
+            asdd_home, project_id, tool_name,
+            action="upgrade", from_version=current, to_version=result.version,
+            exit_code=0 if reload_ok else 5,
+            duration_ms=int((time.time() - started) * 1000),
+        )
+
+        return {
+            "command": "upgrade",
+            "tool": tool_name,
+            "project_id": project_id,
+            "from": current,
+            "to": result.version,
+            "reload": reload,
+            "reload_succeeded": reload_ok,
+            "noop": False,
+        }
+
+
+def cmd_rollback(
+    *, asdd_home: Path, project_id: str, tool_name: str
+) -> dict[str, Any]:
+    _registry_lookup(asdd_home, project_id)
+    tool = _tool_or_raise(tool_name)
+    started = time.time()
+    with tool_manifest.acquire_lock(asdd_home, project_id, tool_name):
+        manifest = tool_manifest.load(asdd_home, project_id, tool_name)
+        if manifest is None or len(manifest.history) < 2:
+            raise BootstrapError(
+                f"no prior version of {tool_name} in {project_id} to roll back to"
+            )
+        was = manifest.current_version
+        target = manifest.history[1].version
+        manifest.history[0], manifest.history[1] = manifest.history[1], manifest.history[0]
+        manifest.current_version = target
+        tools_mod.retarget_bin_symlink(
+            tool_manifest.project_tools_dir(asdd_home, project_id),
+            tool,
+            target,
+        )
+        tool_manifest.save(asdd_home, project_id, manifest)
+        tool_manifest.append_upgrade_log(
+            asdd_home, project_id, tool_name,
+            action="rollback", from_version=was, to_version=target,
+            exit_code=0, duration_ms=int((time.time() - started) * 1000),
+        )
+        return {
+            "command": "rollback",
+            "tool": tool_name,
+            "project_id": project_id,
+            "from": was,
+            "to": target,
+        }
+
+
+def cmd_pin(
+    *, asdd_home: Path, project_id: str, tool_name: str, version: str
+) -> dict[str, Any]:
+    _registry_lookup(asdd_home, project_id)
+    _tool_or_raise(tool_name)
+    with tool_manifest.acquire_lock(asdd_home, project_id, tool_name):
+        manifest = tool_manifest.load(asdd_home, project_id, tool_name)
+        if manifest is None:
+            raise BootstrapError(
+                f"{tool_name} has no overlay state in {project_id}; "
+                f"upgrade first to pin"
+            )
+        if manifest.current_version != version:
+            raise BootstrapError(
+                f"cannot pin {tool_name} to {version}; current is "
+                f"{manifest.current_version} — upgrade first or amend the pin target"
+            )
+        manifest.pin = tool_manifest.Pin(version=version, set_at=int(time.time()))
+        tool_manifest.save(asdd_home, project_id, manifest)
+        return {
+            "command": "pin",
+            "tool": tool_name,
+            "project_id": project_id,
+            "version": version,
+        }
+
+
+def cmd_unpin(
+    *, asdd_home: Path, project_id: str, tool_name: str
+) -> dict[str, Any]:
+    _registry_lookup(asdd_home, project_id)
+    _tool_or_raise(tool_name)
+    with tool_manifest.acquire_lock(asdd_home, project_id, tool_name):
+        manifest = tool_manifest.load(asdd_home, project_id, tool_name)
+        if manifest is None or manifest.pin is None:
+            return {
+                "command": "unpin",
+                "tool": tool_name,
+                "project_id": project_id,
+                "noop": True,
+            }
+        manifest.pin = None
+        tool_manifest.save(asdd_home, project_id, manifest)
+        return {
+            "command": "unpin",
+            "tool": tool_name,
+            "project_id": project_id,
+            "noop": False,
+        }
+
+
+def cmd_reset_tools(
+    *, asdd_home: Path, project_id: str, tool_name: str | None
+) -> dict[str, Any]:
+    _registry_lookup(asdd_home, project_id)
+    project_dir = tool_manifest.project_tools_dir(asdd_home, project_id)
+    cleared = []
+    if tool_name is None:
+        for sub in sorted(project_dir.iterdir()) if project_dir.exists() else []:
+            if not sub.is_dir() or sub.name == "bin":
+                continue
+            _tool_or_raise(sub.name)
+            shutil.rmtree(sub, ignore_errors=True)
+            cleared.append(sub.name)
+        if (project_dir / "bin").exists():
+            shutil.rmtree(project_dir / "bin", ignore_errors=True)
+    else:
+        _tool_or_raise(tool_name)
+        sub = project_dir / tool_name
+        if sub.exists():
+            shutil.rmtree(sub, ignore_errors=True)
+            cleared.append(tool_name)
+        link = project_dir / "bin" / tools_mod.TOOLS[tool_name].binary_name
+        if link.is_symlink() or link.exists():
+            link.unlink()
+    return {
+        "command": "reset-tools",
+        "project_id": project_id,
+        "cleared": cleared,
+    }
+
+
+def cmd_versions(*, asdd_home: Path, project_id: str) -> dict[str, Any]:
+    _registry_lookup(asdd_home, project_id)
+    container_name = project_container.container_name(project_id)
+    latest = version_check.check_all(asdd_home)
+    rows = []
+    for name in sorted(tools_mod.TOOLS.keys()):
+        tool = tools_mod.TOOLS[name]
+        manifest = tool_manifest.load(asdd_home, project_id, name)
+        if manifest is not None:
+            installed = manifest.current_version
+            pin = manifest.pin.version if manifest.pin else None
+        else:
+            installed = tools_mod.read_baseline_version(container_name, name)
+            pin = None
+        latest_ver = latest.get(name)
+        if pin and pin == installed:
+            status = "pinned"
+        elif latest_ver is None:
+            status = "could not check"
+        elif latest_ver == installed:
+            status = "current"
+        else:
+            status = "update available"
+        rows.append(
+            {
+                "tool": name,
+                "installed": installed or "?",
+                "latest": latest_ver or "?",
+                "pin": pin or "",
+                "status": status,
+            }
+        )
+    return {"command": "versions", "project_id": project_id, "tools": rows}
+
+
+def stale_tools_for_banner(
+    asdd_home: Path, project_id: str
+) -> list[banner_mod.BannerLine]:
+    """Compute the banner input. Returns only tools where an upgrade is available
+    AND the tool is not pinned at its current version. Safe to call when the
+    container isn't running (treats unknown installed-version as not-stale)."""
+    container_name = project_container.container_name(project_id)
+    latest = version_check.check_all(asdd_home)
+    out: list[banner_mod.BannerLine] = []
+    for name, tool in tools_mod.TOOLS.items():
+        latest_ver = latest.get(name)
+        if latest_ver is None:
+            continue
+        manifest = tool_manifest.load(asdd_home, project_id, name)
+        if manifest is not None:
+            installed = manifest.current_version
+            if manifest.pin and manifest.pin.version == installed:
+                continue
+        else:
+            installed = tools_mod.read_baseline_version(container_name, name)
+            if installed is None:
+                continue
+        if installed == latest_ver:
+            continue
+        out.append(
+            banner_mod.BannerLine(
+                tool=name,
+                installed=installed,
+                latest=latest_ver,
+                project_id=project_id,
+            )
+        )
+    return out
+
+
+def print_banner(asdd_home: Path, project_id: str, *, quiet: bool = False) -> None:
+    """Compute + print the banner to stderr. Silent on `quiet` or `NO_BANNER`."""
+    if quiet or os.environ.get("NO_BANNER"):
+        return
+    try:
+        stale = stale_tools_for_banner(asdd_home, project_id)
+    except Exception:
+        return
+    lines = banner_mod.render(stale)
+    if not lines:
+        return
+    click.echo("", err=True)
+    for line in lines:
+        click.echo(line, err=True)
+    click.echo("", err=True)
 
 
 def main() -> None:

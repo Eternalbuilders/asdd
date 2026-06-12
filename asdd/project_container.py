@@ -122,10 +122,14 @@ def auth_mounts(asdd_home: Path) -> list[tuple[str, str, str]]:
 
 def _compose_mounts(pc: ProjectContainer) -> list[tuple[str, str, str]]:
     """Mounts for a container: the workspace, plus the subscription store
-    unless this is an API-key opt-in run (spec 009 FR-007)."""
+    unless this is an API-key opt-in run (spec 009 FR-007), plus the per-
+    project tool overlay (spec 002)."""
     mounts = [(str(pc.workspace_path), IN_CONTAINER_WORKDIR, "rw")]
     if pc.asdd_home is not None and not pc.use_api_key:
         mounts += auth_mounts(pc.asdd_home)
+    if pc.asdd_home is not None:
+        host, container = bind_mount_for_tools(pc.project_id, pc.asdd_home)
+        mounts.append((host, container, "rw"))
     return mounts
 
 
@@ -434,6 +438,43 @@ def state(project_id: str) -> str | None:
 def is_persistent_running(project_id: str) -> bool:
     """True iff a persistent-mode container for this project is running (FR-013)."""
     return is_running(project_id) and running_mode(project_id) == "persistent"
+
+
+# --- Spec 002: tool overlay support ---------------------------------------
+
+
+def bounce_persistent_claude(project_id: str) -> bool:
+    """Kill the running claude in the project's tmux session (spec 002 --reload).
+
+    Returns True if a persistent session was running and we sent the kill;
+    False if there's nothing to bounce. The launchd babysitter will restart
+    the container; ``asdd-session`` then relaunches claude via
+    ``claude --continue``, picking up the new binary.
+    """
+    if not is_persistent_running(project_id):
+        return False
+    name = container_name(project_id)
+    result = subprocess.run(
+        ["docker", "exec", name, "tmux", "kill-window", "-t", "asdd:0"],
+        capture_output=True,
+        text=True,
+    )
+    return result.returncode == 0
+
+
+def bind_mount_for_tools(project_id: str, asdd_home: Path) -> tuple[str, str]:
+    """Return the (host_path, container_path) bind mount for this project's
+    tool overlay (spec 002).
+
+    Host: ``$ASDD_HOME/_state/tools/<project_id>/``
+    Container: ``/home/asdd/.asdd-tools/``
+
+    The directory is created with ``0700`` if missing so the bind mount has
+    something to point at.
+    """
+    host = asdd_home / "_state" / "tools" / project_id
+    host.mkdir(parents=True, exist_ok=True, mode=0o700)
+    return (str(host), "/home/asdd/.asdd-tools")
 
 
 def exists(project_id: str) -> bool:

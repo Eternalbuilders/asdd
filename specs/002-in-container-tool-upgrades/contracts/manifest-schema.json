@@ -1,0 +1,73 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://asdd/contracts/manifest-v1.json",
+  "title": "Per-tool manifest (v1)",
+  "description": "Per-project per-tool upgrade state, stored at $ASDD_HOME/_state/tools/<project_id>/<tool_name>/manifest.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "tool_name", "current_version", "history", "pin"],
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 1,
+      "description": "Bump on incompatible changes. Readers refuse unknown versions."
+    },
+    "tool_name": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[a-z][a-z0-9-]*$",
+      "description": "Matches the tool registry key in asdd/tools.py."
+    },
+    "current_version": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Version currently pointed at by the overlay's bin/<binary> symlink. Must equal history[0].version."
+    },
+    "pin": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["version", "set_at"],
+          "properties": {
+            "version": {
+              "type": "string",
+              "minLength": 1
+            },
+            "set_at": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Unix epoch seconds when the pin was set."
+            }
+          }
+        }
+      ]
+    },
+    "history": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 2,
+      "description": "Most-recent-first. history[0] is the current version. Cap = 2 prior versions retained.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["version", "installed_at", "install_method", "size_bytes"],
+        "properties": {
+          "version": { "type": "string", "minLength": 1 },
+          "installed_at": { "type": "integer", "minimum": 0 },
+          "install_method": {
+            "type": "string",
+            "enum": ["npm-global", "github-release", "astral-install"]
+          },
+          "size_bytes": { "type": "integer", "minimum": 0 }
+        }
+      }
+    },
+    "last_checked_at": {
+      "type": ["integer", "null"],
+      "minimum": 0,
+      "description": "Unix epoch seconds of the most recent successful upstream version probe. May be null when no check has run since first install."
+    }
+  }
+}

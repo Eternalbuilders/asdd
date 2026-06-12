@@ -41,26 +41,34 @@ RUN ARCH="$(dpkg --print-architecture)" \
         "https://github.com/getsops/sops/releases/download/v${SOPS_VERSION}/sops-v${SOPS_VERSION}.linux.${ARCH}" \
     && chmod +x /usr/local/bin/sops
 
-# GitHub CLI (gh) — for repo operations from inside the container (pushing
-# branches, opening PRs). Pinned + arch-aware, same idiom as sops above.
-# Policy: bump this pin intentionally per asdd minor release. Do NOT float
-# to `latest` — see specs/001-container-shell-and-gh/research.md R4.
+# Spec 002 — operator-facing tools (gh, uv, claude) install into the
+# baseline directory at /opt/asdd-baseline/. Per-project overlays at
+# /home/asdd/.asdd-tools/bin/ (bind-mounted at run time) take precedence
+# via PATH ordering — operator upgrades land in the overlay, the baseline
+# below is the always-available floor. See specs/002-in-container-tool-upgrades/.
+RUN mkdir -p /opt/asdd-baseline/bin /opt/asdd-baseline/versions
+
+# GitHub CLI (gh) — installed into the baseline. Operator upgrades via
+# `asdd upgrade gh <project>` (spec 002) land in the per-project overlay.
 ARG GH_VERSION=2.94.0
 RUN ARCH="$(dpkg --print-architecture)" \
     && curl -fsSL -o /tmp/gh.tar.gz \
         "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_${ARCH}.tar.gz" \
     && tar -xzf /tmp/gh.tar.gz -C /tmp \
-    && install -m 0755 "/tmp/gh_${GH_VERSION}_linux_${ARCH}/bin/gh" /usr/local/bin/gh \
-    && rm -rf /tmp/gh.tar.gz "/tmp/gh_${GH_VERSION}_linux_${ARCH}"
+    && install -m 0755 "/tmp/gh_${GH_VERSION}_linux_${ARCH}/bin/gh" /opt/asdd-baseline/bin/gh \
+    && rm -rf /tmp/gh.tar.gz "/tmp/gh_${GH_VERSION}_linux_${ARCH}" \
+    && echo "${GH_VERSION}" > /opt/asdd-baseline/versions/gh
 
-# uv — astral.sh package manager. Required by `asdd new` to invoke
-# `uvx --from git+https://github.com/github/spec-kit.git specify init`
-# when scaffolding a new project (replaces the old template-copy approach
-# that drifted from upstream Spec Kit and broke slash-command discovery).
-RUN curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh
+# uv — astral.sh package manager. Installed into the baseline.
+RUN curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/opt/asdd-baseline/bin sh \
+    && /opt/asdd-baseline/bin/uv --version | awk '{print $2}' > /opt/asdd-baseline/versions/uv
 
-# Claude Code — same npm package the kernel image uses.
-RUN npm install -g @anthropic-ai/claude-code
+# Claude Code — installed into the baseline npm prefix (NOT /usr/local).
+# This is critical: the asdd user (uid 1000) MUST be able to read but the
+# files are root-owned; operator upgrades land in the user-writable
+# /home/asdd/.asdd-tools/ overlay where PATH resolves first.
+RUN npm install -g --prefix=/opt/asdd-baseline @anthropic-ai/claude-code \
+    && /opt/asdd-baseline/bin/claude --version | awk '{print $1}' > /opt/asdd-baseline/versions/claude
 
 # Non-root user. UID 1000 matches the host's typical first user so
 # bind-mounted files keep sane ownership on macOS via OrbStack/Docker
@@ -114,7 +122,8 @@ RUN pip install --no-cache-dir -e .
 # platform's working area on container start.
 USER asdd
 ENV ASDD_HOME=/asdd_home \
-    HOME=/home/asdd
+    HOME=/home/asdd \
+    PATH=/home/asdd/.asdd-tools/bin:/opt/asdd-baseline/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 WORKDIR /asdd_home
 
 # No ENTRYPOINT override — `docker compose run -it operator` (or with
