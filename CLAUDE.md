@@ -75,8 +75,9 @@ user direction is a regression.
 | Skeleton at `project_skeleton/`, not `controlvault-skeleton/` | `asdd/bootstrap.py:40` | Same reason. |
 | Three deps only: PyYAML, jsonschema, click | `pyproject.toml` | Slimming was deliberate — kept asdd lean. Adding deps needs justification. |
 | Tests pass before commit | `make test` | 106 unit tests; integration tests skip cleanly when docker isn't available. |
-| Subscription auth is the default for all modes | `asdd/auth.py`, `asdd/project_container.py:auth_mounts` | Spec 009: every mode mounts the asdd-owned store at `$ASDD_HOME/_state/claude-auth/`; `ANTHROPIC_API_KEY` is opt-in (`dispatch --api-key`), not the default. Supersedes spec 008 FR-009 for Claude creds. |
+| Subscription auth is the default for all modes | `asdd/auth.py`, `asdd/project_container.py:auth_mounts` | Spec 009: every mode mounts the asdd-owned credential store (`claude.json` + `claude/.credentials.json`) at `$ASDD_HOME/_state/claude-auth/`. `ANTHROPIC_API_KEY` is opt-in (`dispatch --api-key`), not the default. Supersedes spec 008 FR-009 for Claude creds. |
 | Credential store never leaves `$ASDD_HOME` | `.gitignore`, `asdd/auth.py` | Holds live OAuth tokens; git-ignored and excluded from project workspaces and archives; `0700/0600`. |
+| Per-project Claude state is isolated per container | `asdd/auth.py:per_project_dir`, `asdd/project_container.py:auth_mounts` | Spec 003: each project's `~/.claude/` (transcripts, auto-memory, todos, shell-snapshots, ide) lives at `_state/claude-auth/per-project/<id>/` and is bind-mounted into only that project's container. Only the credential file is overlaid from the shared store. Per-project state is removed on `asdd archive`. |
 | Persistent-session supervisor is host-side launchd only; no inbound port | `asdd/supervisor.py` | Spec 010: container kept alive by Docker `--restart unless-stopped` + a launchd agent (`RunAtLoad`); nothing in-container calls launchd; "remote-control" is local attach, never an inbound listener. |
 
 ## Working with the user
@@ -125,5 +126,5 @@ The full extraction story and outstanding follow-ups live in
 <!-- SPECKIT START -->
 For additional context about technologies to be used, project structure,
 shell commands, and other important information, read the current plan
-at `specs/002-in-container-tool-upgrades/plan.md`.
+at `specs/003-claude-state-isolation/plan.md`.
 <!-- SPECKIT END -->

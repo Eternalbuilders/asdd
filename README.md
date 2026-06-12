@@ -117,7 +117,7 @@ project image.
 $ASDD_HOME/
 ├── _state/projects.yml      # the registry
 ├── _state/audit.log
-├── _state/claude-auth/      # subscription credential store (git-ignored)
+├── _state/claude-auth/      # subscription credential store + per-project Claude state (git-ignored)
 ├── _templates/              # copied from project_skeleton/ at `asdd init`
 ├── projects/<id>/           # per-project workspace, mounted at /asdd_home
 └── _archive/                # archived projects

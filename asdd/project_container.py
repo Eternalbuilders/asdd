@@ -14,7 +14,9 @@ daemon (gated by `@pytest.mark.docker`).
 from __future__ import annotations
 
 import datetime as _dt
+import os
 import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -92,63 +94,97 @@ def container_name(project_id: str) -> str:
     return f"{CONTAINER_PREFIX}{project_id}"
 
 
-def auth_mounts(asdd_home: Path) -> list[tuple[str, str, str]]:
-    """Mount tuples for the asdd-owned subscription credential store (spec 009).
+def auth_mounts(
+    asdd_home: Path,
+    project_id: str | None = None,
+) -> list[tuple[str, str, str]]:
+    """Mount tuples for the asdd-owned credential store + per-project state (spec 003/009).
 
-    Maps the store's ``claude.json`` and ``claude/`` onto the in-container
-    user's ``~/.claude.json`` and ``~/.claude/`` read-write, so the
-    in-container Claude session reads, refreshes, and writes the login back
-    to the one shared store (FR-002/FR-004/FR-005/FR-015). Used by every
-    mode; replaces spec 008's interactive-only host ``~/.claude`` mount.
+    Two callers, two layouts:
+
+    - ``project_id is None`` (throwaway interactive-login container, FR-010):
+      returns 2 tuples — the shared ``claude.json`` file mount and the shared
+      ``.credentials.json`` file mount. No per-project directory mount; any
+      ``~/.claude/`` writes the login flow makes are ephemeral.
+
+    - ``project_id == "<id>"`` (every real project container): returns 3
+      tuples in the contractual order
+      ``[claude.json, ~/.claude dir, ~/.claude/.credentials.json file]``.
+      The directory mount MUST precede the file mount inside it so the kernel's
+      VFS resolves ``.credentials.json`` to the shared host file (spec 003 R2).
+
+    Both layouts preserve the spec 009 invariants: one host-side credential
+    store, every container authenticates against it without re-prompting,
+    a token refresh in any container is visible to all on next start.
+
+    Materialises mount targets before returning (Docker auto-creates missing
+    targets as directories, corrupting file mounts). Idempotent on a seeded
+    store; threads ``project_id`` through so the per-project subtree is
+    created on first start (FR-011).
     """
-    # Materialise the store as correctly-typed files before handing Docker the
-    # mount targets: a missing target is auto-created by Docker as a directory,
-    # which corrupts claude.json and breaks the next login. ensure_mountable is
-    # idempotent and non-destructive on an already-seeded store.
-    auth.ensure_mountable(asdd_home)
-    return [
-        (
-            str(auth.store_json_path(asdd_home)),
-            f"{IN_CONTAINER_USER_HOME}/.claude.json",
-            "rw",
-        ),
-        (
-            str(auth.store_claude_dir(asdd_home)),
-            f"{IN_CONTAINER_USER_HOME}/.claude",
-            "rw",
-        ),
-    ]
+    auth.ensure_mountable(asdd_home, project_id=project_id)
+    shared_json = (
+        str(auth.store_json_path(asdd_home)),
+        f"{IN_CONTAINER_USER_HOME}/.claude.json",
+        "rw",
+    )
+    shared_creds = (
+        str(auth.credentials_file(asdd_home)),
+        f"{IN_CONTAINER_USER_HOME}/.claude/.credentials.json",
+        "rw",
+    )
+    if project_id is None:
+        return [shared_json, shared_creds]
+    per_project = (
+        str(auth.per_project_dir(asdd_home, project_id)),
+        f"{IN_CONTAINER_USER_HOME}/.claude",
+        "rw",
+    )
+    # Order is contractual: directory mount precedes the file overlay
+    # inside it (R2). Callers building docker run argv MUST preserve list order.
+    return [shared_json, per_project, shared_creds]
 
 
 def _compose_mounts(pc: ProjectContainer) -> list[tuple[str, str, str]]:
-    """Mounts for a container: the workspace, plus the subscription store
-    unless this is an API-key opt-in run (spec 009 FR-007), plus the per-
-    project tool overlay (spec 002)."""
+    """Mounts for a container: the workspace, plus the shared credential
+    store + per-project Claude state subtree unless this is an API-key opt-in
+    run (spec 009 FR-007), plus the per-project tool overlay (spec 002)."""
     mounts = [(str(pc.workspace_path), IN_CONTAINER_WORKDIR, "rw")]
     if pc.asdd_home is not None and not pc.use_api_key:
-        mounts += auth_mounts(pc.asdd_home)
+        mounts += auth_mounts(pc.asdd_home, project_id=pc.project_id)
     if pc.asdd_home is not None:
         host, container = bind_mount_for_tools(pc.project_id, pc.asdd_home)
         mounts.append((host, container, "rw"))
     return mounts
 
 
-def interactive_mounts(workspace_path: Path, asdd_home: Path | None = None) -> list[tuple[str, str, str]]:
-    """Mount tuples for interactive mode: workspace + subscription store."""
+def interactive_mounts(
+    workspace_path: Path,
+    asdd_home: Path | None = None,
+    *,
+    project_id: str | None = None,
+) -> list[tuple[str, str, str]]:
+    """Mount tuples for interactive mode: workspace + shared credentials +
+    per-project Claude state (when ``project_id`` is supplied)."""
     mounts = [(str(workspace_path), IN_CONTAINER_WORKDIR, "rw")]
     if asdd_home is not None:
-        mounts += auth_mounts(asdd_home)
+        mounts += auth_mounts(asdd_home, project_id=project_id)
     return mounts
 
 
 def autonomous_mounts(
-    workspace_path: Path, asdd_home: Path | None = None, *, use_api_key: bool = False
+    workspace_path: Path,
+    asdd_home: Path | None = None,
+    *,
+    project_id: str | None = None,
+    use_api_key: bool = False,
 ) -> list[tuple[str, str, str]]:
-    """Mount tuples for autonomous mode: workspace + subscription store
-    (unless ``use_api_key`` — then workspace only and the key is injected)."""
+    """Mount tuples for autonomous mode: workspace + shared credentials +
+    per-project Claude state (when ``project_id`` is supplied); or workspace
+    only when ``use_api_key`` (then the API key is injected instead)."""
     mounts = [(str(workspace_path), IN_CONTAINER_WORKDIR, "rw")]
     if asdd_home is not None and not use_api_key:
-        mounts += auth_mounts(asdd_home)
+        mounts += auth_mounts(asdd_home, project_id=project_id)
     return mounts
 
 
@@ -211,6 +247,31 @@ _STUB_OUTPUT_ENV = "ASDD_JOB_STUB_OUTPUT"
 _PROJECT_ID_ENV = "ASDD_PROJECT_ID"
 _SESSION_STUB_ENV = "ASDD_SESSION_STUB"
 
+# Spec 003 US4 / FR-009: one-line stderr notice when the pre-fix mount layout
+# left mixed per-project state under the shared store. The notice is emitted
+# at most once per ASDD_HOME; the marker file suppresses re-emission.
+_LEGACY_STATE_NOTICE = (
+    "asdd: legacy mixed Claude state detected at "
+    "_state/claude-auth/claude/projects/. Per-project isolation now applies "
+    "to new sessions. Run `asdd logout && asdd login` for a clean slate if "
+    "desired."
+)
+
+
+def _maybe_emit_legacy_state_notice(asdd_home: Path) -> None:
+    """Spec 003 US4: once per host, on first project start after upgrade,
+    tell the operator that pre-fix mixed state is sitting under the shared
+    store. Idempotent — the marker file blocks re-emission."""
+    if not auth.legacy_state_present(asdd_home):
+        return
+    marker = auth.legacy_notice_marker(asdd_home)
+    if marker.exists():
+        return
+    print(_LEGACY_STATE_NOTICE, file=sys.stderr)
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text("")
+    os.chmod(marker, 0o600)
+
 
 def start_container(
     pc: ProjectContainer,
@@ -224,6 +285,8 @@ def start_container(
     via the spec 008 amendment: decrypted on host, injected at container
     start; no per-dispatch tmpfs).
     """
+    if pc.asdd_home is not None:
+        _maybe_emit_legacy_state_notice(pc.asdd_home)
     mounts = _compose_mounts(pc)
     started_at = _dt.datetime.now(_dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -532,7 +595,10 @@ def run_interactive_login(asdd_home: Path) -> int:
         "-w",
         IN_CONTAINER_USER_HOME,
     ]
-    for host, container, mode in auth_mounts(asdd_home):
+    # Throwaway login container — no project_id (spec 003 FR-010 /
+    # contracts/auth-mounts.md Case A). Only the shared credential file mounts
+    # are required; any ~/.claude/ writes are ephemeral on the --rm container.
+    for host, container, mode in auth_mounts(asdd_home, project_id=None):
         cmd += ["-v", f"{host}:{container}:{mode}"]
     cmd += [IMAGE_NAME, "claude"]
     result = subprocess.run(cmd, check=False)

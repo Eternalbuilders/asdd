@@ -329,6 +329,14 @@ def cmd_archive(*, asdd_home: Path, project_id: str) -> dict[str, Any]:
     project_container.stop_container(project_id)
     project_container.remove_container(project_id, force=True)
 
+    # Spec 003 FR-005 / US3: remove the project's per-project Claude state
+    # subtree (transcripts, auto-memory, todos, shell-snapshots) once the
+    # container is gone. Conversation history is ephemeral; not snapshotted.
+    per_project = auth.per_project_dir(asdd_home, project_id)
+    if per_project.exists():
+        shutil.rmtree(per_project, ignore_errors=True)
+        _emit_progress("per_project_state_removed", project_id=project_id)
+
     # Snapshot to _archive/<id>-<ts>.tar.gz before the state transition.
     archive_dir = asdd_home / "_archive"
     archive_dir.mkdir(parents=True, exist_ok=True)

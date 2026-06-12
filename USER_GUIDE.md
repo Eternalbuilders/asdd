@@ -360,8 +360,11 @@ inside — handy when you have shells open on more than one project.
 What's mounted from your Mac:
 - the project workspace at `/asdd_home` (read/write)
 - your asdd subscription credentials (from `$ASDD_HOME/_state/claude-auth/`)
-  onto the container user's `~/.claude.json` and `~/.claude`, so Claude Code is
-  already logged in from your `asdd login` (§4)
+  onto the container user's `~/.claude.json` and `~/.claude/.credentials.json`,
+  so Claude Code is already logged in from your `asdd login` (§4)
+- the project's own per-project Claude state (transcripts, auto-memory, todos,
+  shell-snapshots) at `~/.claude/`, kept isolated from every other project.
+  Stored host-side under `$ASDD_HOME/_state/claude-auth/per-project/<id>/`
 
 Everything else on the Mac is invisible — `ls /` won't show your home dir or
 other projects.
