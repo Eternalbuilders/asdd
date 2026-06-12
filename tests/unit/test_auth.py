@@ -46,6 +46,31 @@ def test_store_paths(tmp_path: Path) -> None:
     assert auth.store_claude_dir(home) == auth.store_dir(home) / "claude"
 
 
+# --- spec 003 path helpers -------------------------------------------------
+
+
+def test_per_project_dir_path_shape(tmp_path: Path) -> None:
+    home = tmp_path / "asdd-home"
+    assert auth.per_project_root(home) == auth.store_dir(home) / "per-project"
+    assert auth.per_project_dir(home, "p") == auth.per_project_root(home) / "p"
+
+
+def test_legacy_notice_marker_path(tmp_path: Path) -> None:
+    home = tmp_path / "asdd-home"
+    assert auth.legacy_notice_marker(home) == auth.store_dir(home) / ".migration-notice-shown"
+
+
+def test_legacy_state_present_negative_on_empty_store(tmp_path: Path) -> None:
+    home = tmp_path / "asdd-home"
+    assert auth.legacy_state_present(home) is False
+
+
+def test_legacy_state_present_positive_when_claude_projects_exists(tmp_path: Path) -> None:
+    home = tmp_path / "asdd-home"
+    (auth.store_claude_dir(home) / "projects").mkdir(parents=True)
+    assert auth.legacy_state_present(home) is True
+
+
 def test_ensure_workspace_trusted_creates_and_merges(tmp_path: Path) -> None:
     home = tmp_path / "asdd-home"
     # Pre-existing config must be preserved (merge, not clobber).
@@ -167,6 +192,40 @@ def test_ensure_mountable_heals_dir_and_is_non_destructive(tmp_path: Path) -> No
     assert json.loads(auth.store_json_path(home).read_text()) == {"oauthAccount": {"x": 1}}
 
 
+def test_ensure_mountable_creates_credentials_placeholder_when_missing(tmp_path: Path) -> None:
+    """Spec 003 R3: a missing .credentials.json target would be auto-created by
+    Docker as a directory when we file-bind-mount it; ensure_mountable
+    materialises it as an empty 0600 file first."""
+    home = tmp_path / "asdd-home"
+    auth.ensure_mountable(home)
+    cf = auth.credentials_file(home)
+    assert cf.is_file()
+    assert stat.S_IMODE(cf.stat().st_mode) == 0o600
+
+
+def test_ensure_mountable_does_not_clobber_existing_credentials(tmp_path: Path) -> None:
+    home = tmp_path / "asdd-home"
+    auth.ensure_mountable(home)
+    cf = auth.credentials_file(home)
+    cf.write_text('{"accessToken":"real"}')
+    auth.ensure_mountable(home)
+    assert cf.read_text() == '{"accessToken":"real"}'
+
+
+def test_ensure_mountable_materialises_per_project_dir(tmp_path: Path) -> None:
+    home = tmp_path / "asdd-home"
+    auth.ensure_mountable(home, project_id="p")
+    pp = auth.per_project_dir(home, "p")
+    assert pp.is_dir()
+    assert stat.S_IMODE(pp.stat().st_mode) == 0o700
+
+
+def test_ensure_mountable_no_project_id_skips_per_project(tmp_path: Path) -> None:
+    home = tmp_path / "asdd-home"
+    auth.ensure_mountable(home)
+    assert not auth.per_project_root(home).exists()
+
+
 # --- clear -----------------------------------------------------------------
 
 
@@ -176,6 +235,29 @@ def test_clear_is_idempotent(fake_host: Path, tmp_path: Path) -> None:
     assert auth.clear(home) is True
     assert auth.is_logged_in(home) is False
     assert auth.clear(home) is False  # already gone
+
+
+def test_clear_removes_per_project_subtrees(fake_host: Path, tmp_path: Path) -> None:
+    home = tmp_path / "asdd-home"
+    auth.seed_from_host(home)
+    auth.ensure_mountable(home, project_id="alpha")
+    auth.ensure_mountable(home, project_id="beta")
+    assert auth.per_project_dir(home, "alpha").is_dir()
+    assert auth.per_project_dir(home, "beta").is_dir()
+
+    assert auth.clear(home) is True
+    assert not auth.per_project_root(home).exists()
+    assert not auth.store_dir(home).exists()
+
+
+def test_clear_removes_legacy_notice_marker(fake_host: Path, tmp_path: Path) -> None:
+    home = tmp_path / "asdd-home"
+    auth.seed_from_host(home)
+    auth.legacy_notice_marker(home).write_text("")
+    assert auth.legacy_notice_marker(home).exists()
+
+    assert auth.clear(home) is True
+    assert not auth.legacy_notice_marker(home).exists()
 
 
 # --- fresh-login marker ----------------------------------------------------

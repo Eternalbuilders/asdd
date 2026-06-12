@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+from asdd import auth
 from asdd import project_container as pc
 
 
@@ -38,25 +39,79 @@ def _eflags(argv: list[str]) -> list[str]:
 # --- mount helpers ---------------------------------------------------------
 
 
-def test_auth_mounts_maps_store_to_user_home(tmp_path: Path) -> None:
-    mounts = pc.auth_mounts(tmp_path / "asdd-home")
-    containers = {c for _, c, _ in mounts}
-    assert f"{pc.IN_CONTAINER_USER_HOME}/.claude.json" in containers
-    assert f"{pc.IN_CONTAINER_USER_HOME}/.claude" in containers
+def test_auth_mounts_with_project_id_returns_three_tuples_in_order(tmp_path: Path) -> None:
+    """Spec 003 / contracts/auth-mounts.md Case B: 3 tuples in the
+    contractual order [claude.json, ~/.claude dir, ~/.claude/.credentials.json]."""
+    home = tmp_path / "asdd-home"
+    mounts = pc.auth_mounts(home, project_id="p")
+    container_paths = [c for _, c, _ in mounts]
+    assert container_paths == [
+        f"{pc.IN_CONTAINER_USER_HOME}/.claude.json",
+        f"{pc.IN_CONTAINER_USER_HOME}/.claude",
+        f"{pc.IN_CONTAINER_USER_HOME}/.claude/.credentials.json",
+    ]
     assert all(mode == "rw" for _, _, mode in mounts)
 
 
+def test_auth_mounts_without_project_id_returns_two_shared_tuples(tmp_path: Path) -> None:
+    """Spec 003 / contracts/auth-mounts.md Case A (throwaway login): only the
+    two shared credential mounts, no ~/.claude directory mount."""
+    home = tmp_path / "asdd-home"
+    mounts = pc.auth_mounts(home, project_id=None)
+    container_paths = [c for _, c, _ in mounts]
+    assert container_paths == [
+        f"{pc.IN_CONTAINER_USER_HOME}/.claude.json",
+        f"{pc.IN_CONTAINER_USER_HOME}/.claude/.credentials.json",
+    ]
+
+
+def test_auth_mounts_threads_project_id_to_ensure_mountable(tmp_path: Path) -> None:
+    """Side effect: per-project subtree materialised at 0700."""
+    import stat as _stat
+
+    home = tmp_path / "asdd-home"
+    pc.auth_mounts(home, project_id="p")
+    pp = auth.per_project_dir(home, "p")
+    assert pp.is_dir()
+    assert _stat.S_IMODE(pp.stat().st_mode) == 0o700
+
+
+def test_auth_mounts_default_arg_is_none(tmp_path: Path) -> None:
+    """The signature change must keep the no-project-id form callable as a
+    positional. interactive_login_run uses this."""
+    home = tmp_path / "asdd-home"
+    mounts = pc.auth_mounts(home)
+    assert len(mounts) == 2
+
+
 def test_autonomous_mounts_includes_store_by_default(tmp_path: Path) -> None:
-    mounts = pc.autonomous_mounts(tmp_path / "ws", tmp_path / "home")
+    mounts = pc.autonomous_mounts(tmp_path / "ws", tmp_path / "home", project_id="p")
     containers = {c for _, c, _ in mounts}
     assert f"{pc.IN_CONTAINER_USER_HOME}/.claude.json" in containers
 
 
 def test_autonomous_mounts_excludes_store_on_api_key(tmp_path: Path) -> None:
-    mounts = pc.autonomous_mounts(tmp_path / "ws", tmp_path / "home", use_api_key=True)
+    mounts = pc.autonomous_mounts(
+        tmp_path / "ws", tmp_path / "home", project_id="p", use_api_key=True
+    )
     containers = {c for _, c, _ in mounts}
     assert f"{pc.IN_CONTAINER_USER_HOME}/.claude.json" not in containers
     assert containers == {pc.IN_CONTAINER_WORKDIR}
+
+
+def test_autonomous_mounts_forwards_project_id(tmp_path: Path) -> None:
+    """The per-project subtree path must appear in the rendered mount list."""
+    home = tmp_path / "home"
+    mounts = pc.autonomous_mounts(tmp_path / "ws", home, project_id="p")
+    hosts = [h for h, _, _ in mounts]
+    assert str(auth.per_project_dir(home, "p")) in hosts
+
+
+def test_interactive_mounts_forwards_project_id(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    mounts = pc.interactive_mounts(tmp_path / "ws", home, project_id="p")
+    hosts = [h for h, _, _ in mounts]
+    assert str(auth.per_project_dir(home, "p")) in hosts
 
 
 # --- start_container argv shape --------------------------------------------
@@ -80,6 +135,112 @@ def test_start_container_subscription_default(
     argv = calls[0]
     assert any(".claude.json" in v for v in _vflags(argv)), "store not mounted"
     assert not any(e.startswith("ANTHROPIC_API_KEY=") for e in _eflags(argv))
+
+
+# --- spec 003 US4: migration notice -----------------------------------------
+
+
+def _setup_legacy_state(home: Path) -> None:
+    """Reproduce the pre-spec-003 layout: mixed transcripts under shared store."""
+    legacy_projects = auth.store_claude_dir(home) / "projects"
+    legacy_projects.mkdir(parents=True, exist_ok=True)
+    (legacy_projects / "-asdd-home").mkdir(exist_ok=True)
+    (legacy_projects / "-asdd-home" / "leftover.jsonl").write_text("legacy\n")
+
+
+def test_start_container_emits_migration_notice_on_first_run_with_legacy_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Spec 003 FR-009 / SC-005: first start_container with legacy state
+    surfaces the one-line notice and writes the suppression marker."""
+    _fake_run_capture(monkeypatch)
+    home = tmp_path / "home"
+    _setup_legacy_state(home)
+    assert not auth.legacy_notice_marker(home).exists()
+
+    obj = pc.ProjectContainer(
+        project_id="p",
+        mode="autonomous",
+        workspace_path=tmp_path / "ws",
+        asdd_home=home,
+    )
+    pc.start_container(obj)
+
+    captured = capsys.readouterr()
+    assert "legacy mixed Claude state" in captured.err
+    assert auth.legacy_notice_marker(home).exists()
+
+
+def test_start_container_does_not_re_emit_migration_notice(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _fake_run_capture(monkeypatch)
+    home = tmp_path / "home"
+    _setup_legacy_state(home)
+    # Pre-create the marker — the operator has already been notified.
+    auth.store_dir(home).mkdir(parents=True, exist_ok=True)
+    auth.legacy_notice_marker(home).write_text("")
+
+    obj = pc.ProjectContainer(
+        project_id="p",
+        mode="autonomous",
+        workspace_path=tmp_path / "ws",
+        asdd_home=home,
+    )
+    pc.start_container(obj)
+
+    captured = capsys.readouterr()
+    assert "legacy mixed Claude state" not in captured.err
+
+
+def test_start_container_no_notice_on_clean_install(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _fake_run_capture(monkeypatch)
+    home = tmp_path / "home"
+    # No legacy state, no marker.
+
+    obj = pc.ProjectContainer(
+        project_id="p",
+        mode="autonomous",
+        workspace_path=tmp_path / "ws",
+        asdd_home=home,
+    )
+    pc.start_container(obj)
+
+    captured = capsys.readouterr()
+    assert "legacy mixed Claude state" not in captured.err
+    assert not auth.legacy_notice_marker(home).exists()
+
+
+def test_start_container_per_project_state_dir_mounted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Spec 003 FR-001 / R2: the per-project subtree is mounted at ~/.claude,
+    and the shared .credentials.json file overlay appears AFTER it in argv so
+    the kernel's VFS resolves the file path to the shared host file."""
+    calls = _fake_run_capture(monkeypatch)
+    home = tmp_path / "home"
+
+    obj = pc.ProjectContainer(
+        project_id="alpha",
+        mode="autonomous",
+        workspace_path=tmp_path / "ws",
+        asdd_home=home,
+    )
+    pc.start_container(obj)
+
+    argv = calls[0]
+    vflags = _vflags(argv)
+    per_project_arg = f"{auth.per_project_dir(home, 'alpha')}:{pc.IN_CONTAINER_USER_HOME}/.claude:rw"
+    creds_arg = (
+        f"{auth.credentials_file(home)}:{pc.IN_CONTAINER_USER_HOME}/.claude/.credentials.json:rw"
+    )
+    assert per_project_arg in vflags, "per-project state subtree not mounted at ~/.claude"
+    assert creds_arg in vflags, "shared .credentials.json overlay missing"
+    assert vflags.index(per_project_arg) < vflags.index(creds_arg), (
+        "spec 003 R2: directory mount must precede the file overlay inside it"
+    )
 
 
 def test_start_container_api_key_optin(

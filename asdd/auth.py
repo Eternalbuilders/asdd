@@ -31,11 +31,20 @@ from pathlib import Path
 STORE_DIRNAME = "claude-auth"
 CLAUDE_JSON = "claude.json"
 CLAUDE_DIR = "claude"
+# Per-project Claude state lives under store_dir / per-project / <project_id>/.
+# Bind-mounted at ~/.claude/ in that project's container. Holds everything
+# Claude Code writes under ~/.claude/ that is not credentials: conversation
+# transcripts, auto-memory, todos, shell-snapshots, statsig, ide state.
+# Spec 003 — isolates per-project state across containers.
+PER_PROJECT_DIRNAME = "per-project"
 # The file Claude Code writes when it uses file-based credentials (Linux
 # containers, and macOS when the Keychain is unavailable). This — not the
 # presence of claude.json — is the reliable "is there a real token" signal.
 CREDENTIALS_FILE = ".credentials.json"
 META_FILE = "asdd-auth-meta.json"
+# Marker placed in the store root when start_container has surfaced the
+# legacy-mixed-state notice once. Its presence suppresses re-emission.
+LEGACY_NOTICE_FILENAME = ".migration-notice-shown"
 LOCK_FILE = ".lock"
 
 SOURCE_SEEDED = "seeded-from-host"
@@ -69,6 +78,35 @@ def meta_path(asdd_home: Path) -> Path:
 
 def credentials_file(asdd_home: Path) -> Path:
     return store_claude_dir(asdd_home) / CREDENTIALS_FILE
+
+
+def per_project_root(asdd_home: Path) -> Path:
+    """Root of the per-project state subtrees (spec 003).
+
+    Each project gets its own subdirectory here; the subdirectory is
+    bind-mounted at ``~/.claude/`` in that project's container.
+    """
+    return store_dir(asdd_home) / PER_PROJECT_DIRNAME
+
+
+def per_project_dir(asdd_home: Path, project_id: str) -> Path:
+    """Per-project state directory for ``project_id`` (spec 003)."""
+    return per_project_root(asdd_home) / project_id
+
+
+def legacy_notice_marker(asdd_home: Path) -> Path:
+    """Marker file recording that the legacy-state notice has been shown."""
+    return store_dir(asdd_home) / LEGACY_NOTICE_FILENAME
+
+
+def legacy_state_present(asdd_home: Path) -> bool:
+    """True iff the pre-spec-003 mixed-state layout has accumulated state.
+
+    The shared store's ``claude/projects/`` subdirectory only ever existed
+    under the old over-shared mount. Its presence on the host proves the
+    pre-fix mount layout was in use; the operator may want to clean up.
+    """
+    return (store_claude_dir(asdd_home) / "projects").is_dir()
 
 
 def host_claude_json() -> Path:
@@ -163,14 +201,24 @@ def prepare_empty_store(asdd_home: Path) -> None:
     ensure_mountable(asdd_home)
 
 
-def ensure_mountable(asdd_home: Path) -> None:
-    """Guarantee the store is safe to bind-mount: ``claude.json`` is a regular
-    file and ``claude/`` is a directory, materialising an empty ``claude.json``
-    placeholder when the store has not been seeded yet.
+def ensure_mountable(asdd_home: Path, project_id: str | None = None) -> None:
+    """Guarantee the store is safe to bind-mount.
+
+    Materialises, with correct types and modes:
+
+    - ``claude.json`` as a placeholder file (``0600``) if absent
+    - ``claude/`` as a directory (``0700``)
+    - ``claude/.credentials.json`` as a placeholder file (``0600``) if absent
+      — required because we file-bind-mount it on top of the per-project
+      directory mount (spec 003 / R2). A missing target would be auto-created
+      by Docker as a directory, corrupting the next login.
+    - When ``project_id`` is supplied: ``per-project/<project_id>/`` as a
+      directory (``0700``) for the project's per-container ``~/.claude/``
+      state (spec 003 FR-011).
 
     Docker (and OrbStack) auto-create a *missing* bind-mount target as an empty
     directory. If any container mounts the store before ``asdd login`` seeds it,
-    ``claude.json`` becomes a directory and the next seed crashes with
+    a file target becomes a directory and the next seed crashes with
     IsADirectoryError. Calling this immediately before every container mount
     keeps the mount targets correctly typed and makes the whole flow
     self-healing regardless of which runs first. Non-destructive: an
@@ -190,6 +238,19 @@ def ensure_mountable(asdd_home: Path) -> None:
         d.unlink()
     d.mkdir(parents=True, exist_ok=True)
     os.chmod(d, 0o700)
+
+    cf = credentials_file(asdd_home)
+    _heal_json_is_dir(cf)
+    if not cf.exists():
+        cf.write_text("")
+        os.chmod(cf, 0o600)
+
+    if project_id is not None:
+        pp = per_project_dir(asdd_home, project_id)
+        if pp.exists() and not pp.is_dir() and not pp.is_symlink():
+            pp.unlink()
+        pp.mkdir(parents=True, exist_ok=True)
+        os.chmod(pp, 0o700)
 
 
 def _heal_json_is_dir(path: Path) -> None:
@@ -247,7 +308,14 @@ def ensure_workspace_trusted(asdd_home: Path, workdir: str) -> None:
 
 
 def clear(asdd_home: Path) -> bool:
-    """Remove the credential store. Idempotent; returns True iff it existed."""
+    """Remove the credential store. Idempotent; returns True iff it existed.
+
+    Removes the entire ``_state/claude-auth/`` tree: shared credential surface
+    (``claude.json`` and ``claude/.credentials.json``), every project's
+    per-project state subtree under ``per-project/<id>/``, the legacy-notice
+    marker, and the meta file. Spec 003 FR-006: logout is a single logical
+    operation across credentials and per-project state.
+    """
     d = store_dir(asdd_home)
     if not d.exists():
         return False
@@ -375,8 +443,12 @@ __all__ = [
     "has_credential",
     "host_login_present",
     "is_logged_in",
+    "legacy_notice_marker",
+    "legacy_state_present",
     "mark_fresh_login",
     "meta_path",
+    "per_project_dir",
+    "per_project_root",
     "prepare_empty_store",
     "seed_from_host",
     "status",
