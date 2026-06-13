@@ -324,6 +324,17 @@ How it works under the hood:
   a running persistent session refuses with a clear message rather than
   silently re-attaching — use `asdd attach` for that path.
 
+Scrolling & copy in an attached Claude session (`asdd attach` / `asdd claude`):
+the held session lives in tmux, so the image bakes a tmux config
+(`/etc/tmux.conf`) that makes it feel like a local terminal — a ~50,000-line
+scrollback and `mouse on`. Roll the mouse wheel with **no modifier** to scroll
+back through history; scroll to the bottom (or wait for new output) to return
+to the live view. To copy text onto your Mac clipboard, hold your terminal's
+bypass modifier (Option or Shift, terminal-dependent) while selecting — that
+takes a native selection instead of a tmux one. `Ctrl-b d` still detaches and
+leaves the session (and mobile/web visibility) running. (`asdd open` is a plain
+bash side-shell, not tmux, so it already uses your terminal's own scrollback.)
+
 Pairing status surfaces in `asdd ps` as a `PAIRED` column with four states:
 - `paired` — session is currently visible in the Claude mobile app.
 - `unpaired` — serve is up but pairing hasn't completed (usually transient at
