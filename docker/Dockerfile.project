@@ -116,6 +116,12 @@ COPY --chmod=0755 docker/files/asdd-session.sh /usr/local/bin/asdd-session
 # /etc/bash.bashrc for interactive shells.
 COPY --chmod=0644 docker/files/asdd-prompt.sh /etc/profile.d/asdd-prompt.sh
 
+# Spec 005 (scrollback-history): global tmux config for operator-attached
+# sessions. tmux reads /etc/tmux.conf at server start (the `tmux new-session`
+# in asdd-session.sh), so the held claude pane is born with a long
+# history-limit and mouse scrolling on — local-terminal-like scrollback.
+COPY --chmod=0644 docker/files/asdd-tmux.conf /etc/tmux.conf
+
 RUN pip install --no-cache-dir -e .
 
 # Drop privileges; default shell at /asdd_home so the operator lands in the
