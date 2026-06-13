@@ -89,9 +89,11 @@ apply across their projects; honour them here too.
 **Communication**
 - Be terse. State results, then stop. Don't trail with summaries.
 - No emojis in files or messages unless asked.
-- **Stepwise walkthroughs**: when guiding through multi-step setup or
-  testing on the Mac, present **one step at a time**, wait for the
-  result, then move on. Don't dump a full checklist.
+- **Stepwise walkthroughs**: whenever you present actions the user needs
+  to take — setup, testing, a sequence of Mac commands, any multi-step
+  procedure — give **one step at a time** and **wait for their feedback**
+  before presenting the next. Never dump a full checklist or a numbered
+  list of steps to work through at once.
 - **Mac command clarity**: when asking the user to run a command on
   their Mac, lead with one short labelled sentence naming the command
   and the output to paste back. Example: "Run this on your Mac and
