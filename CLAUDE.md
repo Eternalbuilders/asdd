@@ -127,5 +127,5 @@ The full extraction story and outstanding follow-ups live in
 <!-- SPECKIT START -->
 For additional context about technologies to be used, project structure,
 shell commands, and other important information, read the current plan
-at `specs/004-serve-mobile-pairing/plan.md`.
+at `specs/005-scrollback-history/plan.md`.
 <!-- SPECKIT END -->
