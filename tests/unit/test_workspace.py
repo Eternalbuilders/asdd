@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
+
+import pytest
 
 from asdd import workspace
 
@@ -45,3 +48,62 @@ def test_ensure_dir_keeps_valid_symlink(tmp_path: Path) -> None:
     # A symlink that resolves is the clone's choice — leave it intact.
     assert link.is_symlink()
     assert link.resolve() == target.resolve()
+
+
+# --- spec 006: scaffold writes the Claude permission guardrails ------------
+
+
+def _fake_templates_root(tmp_path: Path) -> Path:
+    """A templates_root carrying the files scaffold() copies."""
+    root = tmp_path / "_templates"
+    (root / ".claude").mkdir(parents=True)
+    (root / "constitution-starter.md").write_text("# constitution\n")
+    (root / ".claude" / "settings.json").write_text(
+        json.dumps({"permissions": {"deny": ["Bash(git push --force *)"]}}) + "\n"
+    )
+    return root
+
+
+def test_scaffold_writes_claude_settings(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """scaffold() must drop .claude/settings.json into the workspace, into the
+    .claude/ dir that `specify init` creates — without clobbering it."""
+    ws = tmp_path / "ws"
+
+    def fake_init(workspace_path: Path) -> None:
+        # Emulate `specify init`: create .specify/ and a pre-existing .claude/
+        # dir with slash-command assets that must survive.
+        (workspace_path / ".specify" / "memory").mkdir(parents=True)
+        (workspace_path / ".claude" / "commands").mkdir(parents=True)
+        (workspace_path / ".claude" / "commands" / "keep.md").write_text("keep")
+
+    monkeypatch.setattr(workspace, "_run_specify_init", fake_init)
+
+    workspace.scaffold(ws, templates_root=_fake_templates_root(tmp_path))
+
+    settings = ws / ".claude" / "settings.json"
+    assert settings.is_file()
+    data = json.loads(settings.read_text())
+    assert "Bash(git push --force *)" in data["permissions"]["deny"]
+    # specify init's .claude/ assets are not clobbered.
+    assert (ws / ".claude" / "commands" / "keep.md").read_text() == "keep"
+
+
+def test_scaffold_raises_when_skeleton_settings_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ws = tmp_path / "ws"
+
+    def fake_init(workspace_path: Path) -> None:
+        (workspace_path / ".specify" / "memory").mkdir(parents=True)
+
+    monkeypatch.setattr(workspace, "_run_specify_init", fake_init)
+
+    root = tmp_path / "_templates"
+    root.mkdir()
+    (root / "constitution-starter.md").write_text("# constitution\n")
+    # no .claude/settings.json on purpose
+
+    with pytest.raises(FileNotFoundError, match="settings.json"):
+        workspace.scaffold(ws, templates_root=root)

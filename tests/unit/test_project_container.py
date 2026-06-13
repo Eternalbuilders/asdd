@@ -444,6 +444,8 @@ def test_attach_claude_argv(monkeypatch: pytest.MonkeyPatch) -> None:
         "-it",
         pc.container_name("hello"),
         "claude",
+        "--permission-mode",
+        "auto",
     ]
 
 

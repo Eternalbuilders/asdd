@@ -128,6 +128,20 @@ def scaffold(workspace_path: Path, *, templates_root: Path) -> None:
     shutil.copy2(src_const, dst_const)
     log.info("scaffolded constitution at %s", dst_const)
 
+    # 2b. Claude Code permission guardrails (spec 006). Write only the
+    # settings.json into the .claude/ dir that `specify init` already created
+    # (do NOT overwrite that dir). The deny-rules block destructive git even
+    # when containers run in auto permission mode.
+    src_settings = templates_root / ".claude" / "settings.json"
+    if not src_settings.is_file():
+        raise FileNotFoundError(
+            f"templates_root missing .claude/settings.json: {src_settings}"
+        )
+    dst_settings = workspace_path / ".claude" / "settings.json"
+    dst_settings.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(src_settings, dst_settings)
+    log.info("scaffolded claude permission guardrails at %s", dst_settings)
+
     # 3. Empty queue dirs.
     for d in _QUEUE_DIRS:
         _ensure_dir(workspace_path / d)

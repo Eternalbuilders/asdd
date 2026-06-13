@@ -650,29 +650,46 @@ atq        atrm <n>                          inspect / cancel scheduled jobs
 
 ---
 
-## A note on automode (bypassing permission prompts)
+## Auto permission mode (low-friction prompts, with guardrails)
 
 The whole reason Claude runs inside a per-project container is so you can let it
-work in **automode** — Claude Code's `--dangerously-skip-permissions` ("YOLO")
-mode, where it edits files and runs commands without stopping to ask for
-approval on each action. On a bare laptop that flag is genuinely dangerous; here
-it isn't, because the container can only see one project's workspace. A wrong
-command, a runaway script, or an over-eager refactor stays trapped inside the
-container — it can't reach your home directory, your other projects, or the
-host. The container is the blast radius, and `asdd` keeps it small. **That
-isolation is the point: the image exists precisely so automode is safe to run.**
+work without stopping to approve every action. On a bare laptop that is
+dangerous; here it isn't, because the container can only see one project's
+workspace. A wrong command, a runaway script, or an over-eager refactor stays
+trapped inside the container — it can't reach your home directory, your other
+projects, or the host. The container is the blast radius, and `asdd` keeps it
+small.
 
-Today:
+**Since spec 006, every way `asdd` starts Claude does so in Claude Code's `auto`
+permission mode** (`--permission-mode auto`) — there is no manual step. In auto
+mode a classifier auto-approves routine actions (git, `gh`, tests, builds) while
+still reviewing anything that escalates scope or touches unrecognized external
+infrastructure. This applies uniformly to:
 
-- **Interactive (`asdd open` / `asdd claude`)** — start the session in automode
-  yourself. From a shell opened via `asdd open`:
-  ```bash
-  (hello-world) asdd@…:/asdd_home$ claude --dangerously-skip-permissions
-  ```
-  `asdd claude` itself does not pass the flag — if you want automode every
-  time, launch via `asdd open` and add the flag at the shell prompt.
-- **Autonomous (`asdd dispatch`)** and **persistent (`asdd serve`)** — the
-  in-container entrypoints (`asdd-run-job.sh`, `asdd-session.sh`) invoke `claude`
-  *without* that flag, by design: automode stays an explicit opt-in rather than
-  baked-in default behavior. If you want a hands-off dispatch or serve run, edit
-  those entrypoint scripts yourself to add `--dangerously-skip-permissions`.
+- **Interactive** — `asdd claude` (`docker exec … claude --permission-mode auto`).
+- **Autonomous** — `asdd dispatch` (`asdd-run-job.sh` runs
+  `claude --permission-mode auto --print`).
+- **Persistent** — `asdd serve` (`asdd-session.sh` starts
+  `claude --permission-mode auto …`, on both the resume and fresh-start paths).
+
+`--dangerously-skip-permissions` is deliberately **not** used: it disables all
+checks, including the deny-guards below. Auto mode keeps a safety review and
+still enforces hard blocks.
+
+### Destructive git is always blocked
+
+Each project ships `.claude/settings.json` with `permissions.deny` rules that
+block force-push, hard reset, rebase, and hook-skipping commits — in every mode,
+even under auto mode (deny rules are evaluated before the classifier). This
+encodes the constitution's branch-protection rule. New projects get the file
+automatically at `asdd new` time.
+
+**Backfilling an existing project** created before spec 006:
+
+```bash
+cp "$ASDD_HOME/_templates/.claude/settings.json" \
+   "$ASDD_HOME/projects/<project-id>/.claude/settings.json"
+```
+
+(The `.claude/` directory already exists in each project from `specify init`;
+this drops the guardrail file into it.)

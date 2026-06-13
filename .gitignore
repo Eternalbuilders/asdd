@@ -27,3 +27,8 @@ _state/claude-auth/
 
 # Claude Code agent folder — may contain credentials or local settings
 .claude/
+# …but the project skeleton ships an intentional, credential-free permission
+# guardrail file that MUST be tracked (spec 006). Re-include just that path.
+!project_skeleton/.claude/
+!project_skeleton/.claude/settings.json
+CLAUDE.md

@@ -16,6 +16,7 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SESSION_SCRIPT = REPO_ROOT / "docker" / "files" / "asdd-session.sh"
+RUN_JOB_SCRIPT = REPO_ROOT / "docker" / "files" / "asdd-run-job.sh"
 
 
 @pytest.fixture
@@ -100,3 +101,39 @@ def test_outer_role_blocks_until_session_ends(stubbed_tmux: tuple[Path, Path]) -
         line for line in log.read_text().splitlines() if line.startswith("has-session ")
     ]
     assert len(has_session_calls) >= 2
+
+
+# --- spec 006: auto permission mode on every claude launch ----------------
+
+
+def test_session_script_starts_claude_in_auto_mode() -> None:
+    """Spec 006 / contracts/container-launch.md: BOTH claude invocations in
+    asdd-session.sh (the --continue resume and the fresh-start fallback) must
+    carry --permission-mode auto, or a resumed session silently reverts to
+    prompting."""
+    text = SESSION_SCRIPT.read_text()
+    claude_lines = [
+        ln.strip()
+        for ln in text.splitlines()
+        if ln.strip().startswith("claude ")
+    ]
+    assert claude_lines, "expected claude invocations in asdd-session.sh"
+    for ln in claude_lines:
+        assert "--permission-mode auto" in ln, ln
+    # Specifically the resume and fresh-start calls.
+    assert any("--continue" in ln and "--permission-mode auto" in ln for ln in claude_lines)
+    assert any(
+        "--continue" not in ln and "--permission-mode auto" in ln for ln in claude_lines
+    )
+
+
+def test_run_job_script_starts_claude_in_auto_mode() -> None:
+    """Spec 006: the autonomous dispatch runner must start claude in auto mode."""
+    text = RUN_JOB_SCRIPT.read_text()
+    claude_lines = [
+        ln.strip() for ln in text.splitlines() if ln.strip().startswith("claude ")
+    ]
+    assert claude_lines, "expected a claude invocation in asdd-run-job.sh"
+    for ln in claude_lines:
+        assert "--permission-mode auto" in ln, ln
+        assert "--print" in ln, ln

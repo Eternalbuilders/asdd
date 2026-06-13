@@ -42,10 +42,10 @@ if [ "${1:-}" = "--inner" ]; then
     # caused a restart loop). Instead: try --continue; if it returns in under a
     # few seconds it had nothing to resume, so fall through to a fresh session.
     start=$(date +%s)
-    claude --continue --remote-control --name "$NAME" || true
+    claude --permission-mode auto --continue --remote-control --name "$NAME" || true
     elapsed=$(( $(date +%s) - start ))
     if [ "$elapsed" -lt 5 ]; then
-        claude --remote-control --name "$NAME" || true
+        claude --permission-mode auto --remote-control --name "$NAME" || true
     fi
     exit 0
 fi

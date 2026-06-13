@@ -443,9 +443,22 @@ def attach_claude(project_id: str) -> int:
 
     Feature 001 US2 — symmetric to ``attach_shell``. Does NOT capture output
     (interactive TTY only). Returns Claude's exit code.
+
+    Spec 006: started in Claude Code's ``auto`` permission mode so routine git
+    runs without per-command approval, matching ``asdd serve``/``dispatch``.
+    Destructive git is still blocked by the project's ``.claude/settings.json``
+    deny-guards (enforced even in auto mode).
     """
     result = subprocess.run(
-        ["docker", "exec", "-it", container_name(project_id), "claude"],
+        [
+            "docker",
+            "exec",
+            "-it",
+            container_name(project_id),
+            "claude",
+            "--permission-mode",
+            "auto",
+        ],
         check=False,
     )
     return result.returncode

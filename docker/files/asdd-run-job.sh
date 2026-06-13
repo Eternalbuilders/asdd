@@ -38,7 +38,7 @@ if [ -n "${ASDD_JOB_STUB_OUTPUT:-}" ]; then
     printf '%s\n' "$ASDD_JOB_STUB_OUTPUT" > "$RESULT_FILE"
 else
     # Production mode — pipe job-note body to claude --print.
-    claude --print < "$JOB_PATH" > "$RESULT_FILE"
+    claude --permission-mode auto --print < "$JOB_PATH" > "$RESULT_FILE"
 fi
 
 echo "asdd-run-job: wrote $RESULT_FILE"
