@@ -78,7 +78,8 @@ user direction is a regression.
 | Subscription auth is the default for all modes | `asdd/auth.py`, `asdd/project_container.py:auth_mounts` | Spec 009: every mode mounts the asdd-owned credential store (`claude.json` + `claude/.credentials.json`) at `$ASDD_HOME/_state/claude-auth/`. `ANTHROPIC_API_KEY` is opt-in (`dispatch --api-key`), not the default. Supersedes spec 008 FR-009 for Claude creds. |
 | Credential store never leaves `$ASDD_HOME` | `.gitignore`, `asdd/auth.py` | Holds live OAuth tokens; git-ignored and excluded from project workspaces and archives; `0700/0600`. |
 | Per-project Claude state is isolated per container | `asdd/auth.py:per_project_dir`, `asdd/project_container.py:auth_mounts` | Spec 003: each project's `~/.claude/` (transcripts, auto-memory, todos, shell-snapshots, ide) lives at `_state/claude-auth/per-project/<id>/` and is bind-mounted into only that project's container. Only the credential file is overlaid from the shared store. Per-project state is removed on `asdd archive`. |
-| Persistent-session supervisor is host-side launchd only; no inbound port | `asdd/supervisor.py` | Spec 010: container kept alive by Docker `--restart unless-stopped` + a launchd agent (`RunAtLoad`); nothing in-container calls launchd; "remote-control" is local attach, never an inbound listener. |
+| Persistent-session supervisor is host-side launchd only; no inbound port | `asdd/supervisor.py` | Spec 010: container kept alive by a launchd agent (`KeepAlive`/`RunAtLoad`); nothing in-container calls launchd. Container exposes no inbound port: the operator's local `asdd attach`/`asdd claude` joins via `docker exec` + tmux, and Claude's mobile-app pairing is outbound HTTPS only — no listener either way. |
+| One Claude process per project's persistent container | `docker/files/asdd-session.sh`, `asdd/bootstrap.py:cmd_claude` | Spec 004 FR-011: `asdd serve` starts a single long-running Claude inside tmux; `asdd attach` and `asdd claude` rejoin that same process (tmux attach), never spawn a second claude. Mobile pairing surfaces in `asdd ps` as the `PAIRED` column. |
 
 ## Working with the user
 
@@ -126,5 +127,5 @@ The full extraction story and outstanding follow-ups live in
 <!-- SPECKIT START -->
 For additional context about technologies to be used, project structure,
 shell commands, and other important information, read the current plan
-at `specs/003-claude-state-isolation/plan.md`.
+at `specs/004-serve-mobile-pairing/plan.md`.
 <!-- SPECKIT END -->

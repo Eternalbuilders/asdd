@@ -445,3 +445,150 @@ def test_attach_claude_argv(monkeypatch: pytest.MonkeyPatch) -> None:
         pc.container_name("hello"),
         "claude",
     ]
+
+
+# --- spec 004: pairing_state derivation -----------------------------------
+
+
+def _fake_docker(monkeypatch: pytest.MonkeyPatch, **outputs: object) -> list[list[str]]:
+    """Stub subprocess.run to drive the helpers used by pairing_state.
+
+    ``outputs`` keys:
+      - is_running: True/False (inspect format `{{.State.Running}}`)
+      - running_mode: "persistent" or "" (inspect Config.Labels)
+      - sessions_stdout: stdout for the `cat ~/.claude/sessions/*.json` exec
+
+    Returns the list of captured argv lists for spying.
+    """
+    calls: list[list[str]] = []
+
+    def fake_run(args, *a, **kw):  # noqa: ANN001, ANN002, ANN003
+        calls.append(list(args))
+        if args[:2] == ["docker", "ps"]:
+            # is_running uses `docker ps --filter name=... --format {{.ID}}`.
+            stdout = "abc123\n" if outputs.get("is_running") else ""
+            return subprocess.CompletedProcess(args, 0, stdout=stdout, stderr="")
+        if args[:2] == ["docker", "inspect"]:
+            fmt = args[args.index("--format") + 1]
+            if "asdd.mode" in fmt:
+                mode = outputs.get("running_mode", "")
+                return subprocess.CompletedProcess(args, 0, stdout=f"{mode}\n", stderr="")
+        if args[:2] == ["docker", "exec"] and "sh" in args:
+            stdout = str(outputs.get("sessions_stdout", ""))
+            return subprocess.CompletedProcess(args, 0, stdout=stdout, stderr="")
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(pc.subprocess, "run", fake_run)
+    return calls
+
+
+def test_pairing_state_no_container(monkeypatch: pytest.MonkeyPatch) -> None:
+    _fake_docker(monkeypatch, is_running=False)
+    assert pc.pairing_state("p") == "n/a"
+
+
+def test_pairing_state_running_but_no_session_file(monkeypatch: pytest.MonkeyPatch) -> None:
+    _fake_docker(
+        monkeypatch, is_running=True, running_mode="persistent", sessions_stdout=""
+    )
+    assert pc.pairing_state("p") == "unpaired"
+
+
+def test_pairing_state_session_without_bridge(monkeypatch: pytest.MonkeyPatch) -> None:
+    import json
+
+    sessions = json.dumps(
+        {
+            "pid": 13,
+            "cwd": pc.IN_CONTAINER_WORKDIR,
+            "kind": "interactive",
+            "updatedAt": 1781340311823,
+            "bridgeSessionId": "",
+        }
+    )
+    _fake_docker(
+        monkeypatch,
+        is_running=True,
+        running_mode="persistent",
+        sessions_stdout=sessions,
+    )
+    # Even with fresh updatedAt, empty bridgeSessionId means unpaired.
+    assert pc.pairing_state("p", now=1781340311.823) == "unpaired"
+
+
+def test_pairing_state_paired_when_bridge_present_and_fresh(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import json
+
+    now_s = 1781340311.823
+    sessions = json.dumps(
+        {
+            "pid": 13,
+            "cwd": pc.IN_CONTAINER_WORKDIR,
+            "kind": "interactive",
+            "updatedAt": int(now_s * 1000) - 10_000,  # 10s old
+            "bridgeSessionId": "session_abc123",
+        }
+    )
+    _fake_docker(
+        monkeypatch,
+        is_running=True,
+        running_mode="persistent",
+        sessions_stdout=sessions,
+    )
+    assert pc.pairing_state("p", now=now_s) == "paired"
+
+
+def test_pairing_state_reconnecting_when_stale(monkeypatch: pytest.MonkeyPatch) -> None:
+    import json
+
+    now_s = 1781340311.823
+    sessions = json.dumps(
+        {
+            "pid": 13,
+            "cwd": pc.IN_CONTAINER_WORKDIR,
+            "kind": "interactive",
+            "updatedAt": int(now_s * 1000) - 120_000,  # 120s old > 60s window
+            "bridgeSessionId": "session_abc123",
+        }
+    )
+    _fake_docker(
+        monkeypatch,
+        is_running=True,
+        running_mode="persistent",
+        sessions_stdout=sessions,
+    )
+    assert pc.pairing_state("p", now=now_s) == "reconnecting"
+
+
+def test_pairing_state_ignores_non_serve_sessions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A session whose cwd is NOT IN_CONTAINER_WORKDIR is not the serve session."""
+    import json
+
+    now_s = 1781340311.823
+    # One session in /tmp (not the serve cwd) — should be ignored.
+    other = json.dumps(
+        {
+            "pid": 99,
+            "cwd": "/tmp",
+            "kind": "interactive",
+            "updatedAt": int(now_s * 1000) - 1_000,
+            "bridgeSessionId": "session_other",
+        }
+    )
+    _fake_docker(
+        monkeypatch, is_running=True, running_mode="persistent", sessions_stdout=other
+    )
+    assert pc.pairing_state("p", now=now_s) == "unpaired"
+
+
+def test_pairing_state_is_filesystem_only(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Spec 004 R1: pairing_state MUST NOT make a network call; only docker exec."""
+    calls = _fake_docker(monkeypatch, is_running=True, running_mode="persistent")
+    pc.pairing_state("p")
+    # Every subprocess.run call must be a docker call. No curl, no python -m urllib, etc.
+    for argv in calls:
+        assert argv[0] == "docker", f"non-docker call observed: {argv}"

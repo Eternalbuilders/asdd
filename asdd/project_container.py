@@ -39,6 +39,15 @@ DOCKERFILE_PATH = REPO_ROOT / "docker" / "Dockerfile.project"
 IN_CONTAINER_WORKDIR = "/asdd_home"
 IN_CONTAINER_USER_HOME = "/home/asdd"
 
+# Spec 004: pairing-state derivation. Claude Code writes one JSON file per
+# running session at ~/.claude/sessions/<pid>.json with a `bridgeSessionId`
+# field that is non-empty when the session is paired with claude.ai (the
+# mobile-app remote-control bridge). `updatedAt` is a millisecond epoch — a
+# session whose JSON hasn't been refreshed in this window is treated as
+# reconnecting rather than paired, matching SC-002/SC-003's 60s recovery bound.
+PairingState = Literal["paired", "unpaired", "reconnecting", "n/a"]
+PAIRING_FRESH_WINDOW_SECONDS = 60
+
 
 @dataclass(frozen=True)
 class ProjectContainer:
@@ -503,6 +512,82 @@ def is_persistent_running(project_id: str) -> bool:
     return is_running(project_id) and running_mode(project_id) == "persistent"
 
 
+# --- Spec 004: mobile-pairing state derivation ----------------------------
+
+
+def _read_session_files(project_id: str) -> list[dict]:
+    """Read every Claude session JSON inside the project's container.
+
+    Spec 004 R1: Claude Code writes ~/.claude/sessions/<pid>.json for each
+    running session; ``bridgeSessionId`` is the truth for mobile-pairing.
+    Returns parsed dicts. Empty when no container, no session yet, or any
+    parse fails — pairing-state inspection is best-effort, never raising.
+    """
+    result = subprocess.run(
+        [
+            "docker",
+            "exec",
+            container_name(project_id),
+            "sh",
+            "-c",
+            "cat ~/.claude/sessions/*.json 2>/dev/null || true",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0 or not result.stdout.strip():
+        return []
+    import json
+
+    sessions: list[dict] = []
+    for line in result.stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(obj, dict):
+            sessions.append(obj)
+    return sessions
+
+
+def pairing_state(project_id: str, *, now: float | None = None) -> PairingState:
+    """Derive the mobile-pairing state for this project (spec 004 FR-008).
+
+    See ``data-model.md`` for the truth table. ``now`` (seconds, epoch) is
+    injectable for tests; defaults to wall-clock. Pure read — never mutates
+    container or store state.
+    """
+    if not is_persistent_running(project_id):
+        return "n/a"
+    sessions = _read_session_files(project_id)
+    serve_sessions = [
+        s
+        for s in sessions
+        if s.get("cwd") == IN_CONTAINER_WORKDIR
+        and s.get("kind") == "interactive"
+    ]
+    if not serve_sessions:
+        return "unpaired"
+    # Most recently updated session wins when multiple are present.
+    s = max(serve_sessions, key=lambda x: x.get("updatedAt", 0))
+    bridge = s.get("bridgeSessionId")
+    if not bridge:
+        return "unpaired"
+    updated_ms = s.get("updatedAt")
+    if not isinstance(updated_ms, (int, float)):
+        return "unpaired"
+    import time
+
+    now_s = now if now is not None else time.time()
+    age_s = now_s - (updated_ms / 1000.0)
+    if age_s > PAIRING_FRESH_WINDOW_SECONDS:
+        return "reconnecting"
+    return "paired"
+
+
 # --- Spec 002: tool overlay support ---------------------------------------
 
 
@@ -653,9 +738,10 @@ def list_running() -> list[dict[str, str]]:
     """List rows from `docker ps` of project containers (`asdd ps`).
 
     Returns a list of dicts with keys: ``project_id``, ``mode``,
-    ``started_at``, ``name``. Empty list if none are running. Returns
-    empty list (not an error) if docker is unreachable, so `asdd ps`
-    degrades gracefully on hosts without a daemon.
+    ``started_at``, ``name``, ``paired``. ``paired`` is the spec 004
+    mobile-pairing state (``"paired"`` / ``"unpaired"`` / ``"reconnecting"``
+    / ``"n/a"``) derived from the container's Claude session JSON.
+    Empty list if no containers running or docker unreachable.
     """
     result = subprocess.run(
         [
@@ -680,12 +766,14 @@ def list_running() -> list[dict[str, str]]:
         if len(parts) < 4:
             continue
         name, project_id, mode, started_at = parts[0], parts[1], parts[2], parts[3]
+        paired = pairing_state(project_id) if mode == "persistent" else "n/a"
         rows.append(
             {
                 "name": name,
                 "project_id": project_id,
                 "mode": mode,
                 "started_at": started_at,
+                "paired": paired,
             }
         )
     return rows
