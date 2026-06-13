@@ -220,8 +220,11 @@ asdd login --fresh   # drops you into a container running `claude`; complete
                      # the login (open the printed URL, paste the code), exit.
 ```
 
-Log out (e.g. handing off the machine) with `asdd logout`. After logout, every
-mode refuses Claude work until you log in again. The stored session refreshes
+Log out (e.g. handing off the machine) with `asdd logout`. Any running serve
+sessions are stopped first (so the next operator login doesn't inherit
+orphaned, paired sessions on their mobile app); logout refuses if any serve
+can't be stopped cleanly, naming the offender. After logout, every mode
+refuses Claude work until you log in again. The stored session refreshes
 itself automatically — including for unattended jobs — so a one-time login
 keeps working without re-authentication.
 
@@ -312,13 +315,23 @@ locally (`asdd attach <id>`) — it's shown at the top of the session.
 
 How it works under the hood:
 - The container's main process is a `tmux` session running one interactive
-  `claude --remote-control`. tmux keeps that single session alive with no
-  client attached, so it stays mobile-visible AND is locally re-attachable.
-  `asdd attach` / `asdd claude` run `tmux attach`, dropping you into the *same*
-  conversation (mobile and your terminal share it — they stay in sync, but
-  don't type in both at once). `asdd open` against a project with a running
-  persistent session refuses with a clear message rather than silently
-  re-attaching — use `asdd attach` for that path.
+  `claude --remote-control`. The supervisor keeps an idle tmux client attached
+  from startup so the pairing handshake always sees a live terminal (spec 004
+  R2: without it, mobile pairing silently fails when no operator is attached).
+  Your `asdd attach` / `asdd claude` runs a second `tmux attach`, dropping you
+  into the *same* conversation (mobile and your terminal share it — they stay
+  in sync, but don't type in both at once). `asdd open` against a project with
+  a running persistent session refuses with a clear message rather than
+  silently re-attaching — use `asdd attach` for that path.
+
+Pairing status surfaces in `asdd ps` as a `PAIRED` column with four states:
+- `paired` — session is currently visible in the Claude mobile app.
+- `unpaired` — serve is up but pairing hasn't completed (usually transient at
+  startup).
+- `reconnecting` — was paired, briefly lost the bridge connection, Claude is
+  re-establishing it on its own. No operator action needed; resolves within a
+  minute of network recovery.
+- `n/a` — not a persistent serve session.
 - A per-project launchd agent (`~/Library/LaunchAgents/com.asdd.session.<id>.plist`)
   runs `asdd serve <id> --supervise` as a foreground babysitter. When the
   container exits (crash, OOM, daemon restart), the babysitter exits too and

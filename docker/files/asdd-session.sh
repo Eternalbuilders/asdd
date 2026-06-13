@@ -53,6 +53,15 @@ fi
 # --- outer role: supervise the tmux session (PID 1) --------------------------
 tmux new-session -d -s "$SESSION" "$0 --inner"
 
+# Spec 004 R2 (intervention A): claude --remote-control only completes its
+# bridge handshake when a tmux client is attached to the session — otherwise
+# the inner pane has no live terminal at startup and pairing silently fails.
+# Keep an idle client attached so the handshake always sees a real pty.
+# `-d` detaches any other client (idempotent across crash-restart cycles).
+# Backgrounded + disowned so PID 1 (this script) stays the supervisor.
+tmux attach -t "$SESSION" -d </dev/null >/dev/null 2>&1 &
+disown
+
 # Block PID 1 until the session ends so the launchd babysitter sees the
 # container exit and relaunches it.
 while tmux has-session -t "$SESSION" 2>/dev/null; do

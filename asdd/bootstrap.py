@@ -704,7 +704,43 @@ def cmd_login(*, asdd_home: Path, fresh: bool = False) -> str:
 
 
 def cmd_logout(*, asdd_home: Path) -> bool:
-    """Clear the subscription credential store (spec 009 FR-011). Idempotent."""
+    """Clear the subscription credential store (spec 009 FR-011). Idempotent.
+
+    Spec 004 FR-006 / clarification Q2: tear down every running serve session
+    before clearing. If any teardown fails, refuse to clear and exit non-zero
+    so we never leave an orphan container holding a soon-to-be-invalid pairing
+    token (a subsequent operator-login would inherit the stranger's session).
+    """
+    failures: list[tuple[str, str]] = []
+    raw = _read_registry_raw(asdd_home)
+    for row in raw.get("projects", []):
+        project_id = row["id"]
+        if not project_container.is_persistent_running(project_id):
+            continue
+        try:
+            try:
+                supervisor.uninstall(project_id)
+            except supervisor.SupervisorError as e:
+                failures.append((project_id, f"supervisor uninstall failed: {e}"))
+                continue
+            if not project_container.stop_container(project_id):
+                failures.append((project_id, "stop_container returned False"))
+                continue
+            if not project_container.remove_container(project_id):
+                failures.append((project_id, "remove_container returned False"))
+                continue
+            _emit_progress("logout_serve_stopped", project_id=project_id)
+        except (OSError, project_container.ProjectContainerError) as e:
+            failures.append((project_id, str(e)))
+
+    if failures:
+        names = ", ".join(f"{p} ({why})" for p, why in failures)
+        raise BootstrapError(
+            "refusing to log out — some serve sessions could not be stopped: "
+            + names
+            + ". Resolve these (e.g. `docker stop --time=30 asdd-project-<id>`) and retry."
+        )
+
     with auth.store_lock(asdd_home):
         removed = auth.clear(asdd_home)
     _emit_progress("logout", removed=removed)
@@ -1146,10 +1182,10 @@ def _cli_ps() -> None:
     if not rows:
         click.echo("(no project containers running)")
         return
-    click.echo(f"{'PROJECT':24} {'MODE':12} {'STARTED':24}")
+    click.echo(f"{'PROJECT':24} {'MODE':12} {'PAIRED':14} {'STARTED':24}")
     for r in rows:
         click.echo(
-            f"{r['project_id']:24} {r['mode']:12} {r['started_at']:24}"
+            f"{r['project_id']:24} {r['mode']:12} {r.get('paired', 'n/a'):14} {r['started_at']:24}"
         )
 
 
